@@ -118,18 +118,6 @@ npm start
 - 后端网络必须能够访问 API。浏览器能打开供应商网站不代表 Node 请求必然可用；本机代理须能够覆盖 Node 流量。
 - 页面使用系统字体，无需加载外部字体资源。
 
-## 验证
-
-```powershell
-npm test
-```
-
-测试使用本机模拟 OpenAI 服务，不使用真实 Key，不产生生图费用。实际模型生成需要你自己的有效配置和额度。
-
-官方接口参考：https://platform.openai.com/docs/api-reference/images/create 。开发环境访问官方文档收到 403，未能现场核对最新模型细节。
-
-## 文件
-
 - `server.js`：Web 服务、API 转发、连接测试、图片下载。
 - `prompt-optimizer.js`：提示词分类优化规则与当前画布上下文。
 - `public/model-capabilities.js`：前后端共用的模型能力规则与配置校验。
