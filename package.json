@@ -1,0 +1,14 @@
+{
+  "name": "prompt-studio-image-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A usable OpenAI-compatible image generation web app.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test tests/server.test.js tests/optimizer.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

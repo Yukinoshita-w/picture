@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="OpenAI 兼容的 AI 生图工作台">
+  <title>Prompt Studio · AI 生图工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="workspace">
+    <div class="gallery-row">
+      <section class="gallery-panel" aria-labelledby="galleryTitle">
+        <header class="gallery-heading">
+          <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><div><h1 id="galleryTitle">Prompt Studio</h1><p>图片与生成历史</p></div></div>
+          <span class="connection-pill"><span class="pulse-dot"></span><span id="connectionText">本地工作台</span></span>
+        </header>
+        <div class="gallery-scroll" id="galleryScroll">
+          <section class="result-area" id="resultArea" aria-live="polite">
+            <div class="empty-state"><div class="empty-icon" aria-hidden="true">✧</div><h2>让想象，出现在这里</h2><p>点击右上角设置连接 API，然后在下方描述你想要的画面。</p><span class="empty-caption">你的下一张作品，从一句话开始</span></div>
+          </section>
+          <section class="history-section" id="historySection" hidden>
+            <div class="history-heading"><h2>最近生成</h2><button class="text-button" id="clearHistory" type="button">清空记录</button></div>
+            <p class="history-note">最多保存 8 张至本机浏览器，点击图片查看大图。</p>
+            <div class="history-grid" id="historyGrid"></div>
+          </section>
+        </div>
+      </section>
+      <nav class="workspace-tools" aria-label="工作台工具">
+        <button class="tool-button" id="settingsButton" type="button" title="API 设置" aria-label="打开 API 设置" aria-haspopup="dialog" aria-controls="settingsDialog">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-.5 2.2-1.7 1L4.6 6 3 8.8l1.5 1.7v2L3 14.2 4.6 17l2.2-.2 1.7 1L9 20h3.2l.5-2.2 1.7-1 2.2.2 1.6-2.8-1.5-1.7v-2l1.5-1.7L16.6 6l-2.2.2-1.7-1L12.2 3Z" transform="translate(1.4 .5)"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>设置</span>
+        </button>
+        <button class="tool-button" id="themeButton" type="button" title="切换主题" aria-label="切换深色主题" aria-pressed="false"><span class="theme-symbol" aria-hidden="true">◐</span><span>主题</span></button>
+      </nav>
+    </div>
+
+    <section class="composer-panel" aria-label="提示词输入区">
+      <form id="generateForm">
+        <div class="composer-heading"><div class="composer-title"><label for="prompt">描述你的画面</label><span class="generation-mode" id="generationMode">文生图</span><button class="text-button undo-prompt" id="undoOptimize" type="button" hidden>撤销优化</button></div><span class="counter" id="promptCounter">0 / 10000</span></div>
+        <div class="reference-list" id="referenceList" aria-label="已添加的参考图片" hidden></div>
+        <textarea id="prompt" name="prompt" maxlength="10000" placeholder="输入提示词，例如：一只戴着宇航员头盔的橘猫，在月球表面看日出，电影感灯光……" required></textarea>
+        <div class="composer-toolbar">
+          <div class="controls-row">
+            <button class="attach-button" id="addReference" type="button" aria-label="添加参考图片" title="添加、拖入或粘贴参考图片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg><span>参考图</span></button>
+            <input id="referenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+            <div class="control"><label for="size">尺寸</label><select id="size" name="size"><option value="default">由接口决定</option></select></div>
+            <div class="control"><label for="quality">画质</label><select id="quality" name="quality"><option value="default">由接口决定</option></select></div>
+            <div class="control"><label for="count">数量</label><select id="count" name="n"><option value="1">1 张</option><option value="2">2 张</option><option value="3">3 张</option><option value="4">4 张</option></select></div>
+            <div class="control strength-control"><label for="optimizationStrength">优化强度</label><select id="optimizationStrength" aria-label="提示词优化强度" title="只影响手动提示词优化"><option value="light">轻度润色</option><option value="standard" selected>标准优化</option><option value="rich">丰富细节</option></select></div>
+          </div>
+          <div class="generate-actions"><span class="shortcut-hint">Ctrl / ⌘ + Enter</span><button class="optimize-button" id="optimizeButton" type="button"><span aria-hidden="true">✧</span><span id="optimizeLabel">优化提示词</span></button><button class="cancel-button" id="cancelButton" type="button" hidden>取消</button><button class="generate-button" id="generateButton" type="submit"><span aria-hidden="true">✦</span><span id="generateLabel">生成图片</span><span aria-hidden="true">↗</span></button></div>
+        </div>
+      </form>
+      <div class="task-progress" id="taskProgress" hidden><span id="taskElapsed"></span><span>取消后服务商仍可能继续处理或计费。</span></div>
+      <p class="reference-hint" id="referenceHint" hidden>支持 PNG / JPEG / WebP，最多 4 张，单张 10 MB、总计 20 MB。可指定每张图用途及需要保留或修改的内容。</p>
+      <p class="workspace-status" id="workspaceStatus" role="status" aria-live="polite">先点击右上角设置，填写 API 信息即可开始生成。</p>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle">
+    <header class="modal-heading"><div><span class="section-label">CONNECTION</span><h2 id="settingsTitle">API 设置</h2></div><button class="close-button" id="closeSettings" type="button" aria-label="关闭设置">×</button></header>
+    <p class="panel-intro">分别配置图片生成和提示词优化服务。密钥只在当前页面中使用，刷新后需要重新填写。</p>
+    <div class="settings-tabs" role="tablist" aria-label="API 配置类型"><button id="imageSettingsTab" type="button" role="tab" aria-selected="true" aria-controls="settingsForm">图片生成 API</button><button id="optimizerSettingsTab" type="button" role="tab" aria-selected="false" aria-controls="optimizerSettingsForm" tabindex="-1">提示词优化 API</button></div>
+        <form id="settingsForm" autocomplete="off" role="tabpanel" aria-labelledby="imageSettingsTab">
+          <div class="preset-toolbar" aria-label="图片生成 API 预设"><label for="imagePreset">配置预设</label><select id="imagePreset"><option value="">不使用预设</option></select><input id="imagePresetName" type="text" maxlength="40" placeholder="预设名称"><button class="button secondary" id="saveImagePreset" type="button">保存</button><button class="button text-button" id="deleteImagePreset" type="button" disabled>删除</button></div>
+          <p class="field-hint preset-hint">预设保存 URL、模型、能力和默认参数，不保存 API Key。切换预设会清空当前 API Key。</p>
+          <label class="field-label" for="apiUrl">API URL <span class="required">*</span></label>
+          <div class="input-wrap"><span class="input-prefix">↗</span><input id="apiUrl" name="apiUrl" type="url" placeholder="https://api.openai.com/v1" required /></div>
+          <p class="field-hint">支持 Base URL（含 /v1）或完整图片接口地址。有参考图时会调用同一服务的图片编辑接口。</p>
+          <label class="field-label" for="apiKey">API KEY <span class="required">*</span></label>
+          <div class="input-wrap"><span class="input-prefix">⌘</span><input id="apiKey" name="apiKey" type="password" placeholder="sk-••••••••••••••••" required /><button type="button" class="reveal-key" id="revealKey" aria-label="显示 API Key">◉</button></div>
+          <label class="field-label" for="model">MODEL（模型名称）<span class="required">*</span></label>
+          <div class="input-wrap"><span class="input-prefix">✣</span><input id="model" name="model" type="text" placeholder="例如：gpt-image-1" required /></div>
+          <div class="quick-models"><span>快速填入</span><button type="button" data-model="gpt-image-1">gpt-image-1</button><button type="button" data-model="dall-e-3">dall-e-3</button></div>
+          <label class="field-label" for="capabilityMode">模型能力</label>
+          <div class="select-wrap"><select id="capabilityMode"><option value="auto">自动识别 · 按模型名称</option><option value="custom">自定义能力 · 按服务商文档</option></select></div>
+          <p class="field-hint">自动识别是常见模型的参数预设，不会探测服务商。第三方接口有差异时请选择自定义；未勾选的参数仅保留接口默认值，不会发送对应字段。</p>
+          <fieldset id="customCapabilities" class="capability-fields" hidden disabled>
+            <legend>允许的接口参数</legend>
+            <fieldset class="capability-options"><legend>尺寸 size（不勾选则不发送）</legend><div id="capabilitySizes" class="capability-choices"></div></fieldset>
+            <fieldset class="capability-options"><legend>画质 quality（不勾选则不发送）</legend><div id="capabilityQualities" class="capability-choices"></div></fieldset>
+            <fieldset class="capability-options"><legend>返回格式 response_format（不勾选则不发送）</legend><div id="capabilityFormats" class="capability-choices"></div></fieldset>
+            <div class="capability-limits">
+              <label>最大生成张数<select id="capabilityMaxCount"><option value="1">1 张</option><option value="2">2 张</option><option value="3">3 张</option><option value="4">4 张</option></select></label>
+              <label>参考图数量<select id="capabilityMaxReferences"><option value="0">不支持参考图</option><option value="1">最多 1 张</option><option value="2">最多 2 张</option><option value="3">最多 3 张</option><option value="4">最多 4 张</option></select></label>
+              <label>参考图上传字段<select id="capabilityImageField"><option value="auto">自动 · 单张 image / 多张 image[]</option><option value="image">image（多图重复此字段）</option><option value="image[]">image[]（单图也使用此字段）</option></select></label>
+            </div>
+            <p class="field-hint">允许值仍需服务实际支持。参考图调用 /images/edits；修改能力不会自动获得该接口。应用最多生成 4 张、参考图最多 4 张。</p>
+          </fieldset>
+          <p id="capabilitySummary" class="field-hint" role="status"></p>
+          <label class="field-label" for="responseFormat">图片返回格式</label>
+          <div class="select-wrap format-select"><select id="responseFormat"><option value="auto">自动 · 使用接口默认值</option><option value="b64_json">Base64 · b64_json</option><option value="url">图片链接 · url</option></select><span>⌄</span></div>
+          <p class="field-hint">按模型能力显示可用选项；默认不发送 response_format。</p>
+          <div class="form-divider"></div>
+          <div class="settings-actions"><button class="button secondary" type="button" id="testButton"><span>⌁</span> 测试连接</button><button class="button text-button" type="button" id="clearButton">清除密钥</button><button class="button primary" type="submit" id="saveSettings">完成设置</button></div>
+          <div class="status-box" id="statusBox" role="status" aria-live="polite"><span class="status-icon">i</span><span id="statusText">API Key 仅通过本机后端转发，不会保存在浏览器或服务器。</span></div>
+        </form>
+    <form id="optimizerSettingsForm" autocomplete="off" role="tabpanel" aria-labelledby="optimizerSettingsTab" hidden>
+      <p class="optimizer-intro">独立配置文本模型，仅点击“优化提示词”时调用。可以与生图接口使用不同服务。</p>
+      <div class="preset-toolbar" aria-label="提示词优化 API 预设"><label for="optimizerPreset">配置预设</label><select id="optimizerPreset"><option value="">不使用预设</option></select><input id="optimizerPresetName" type="text" maxlength="40" placeholder="预设名称"><button class="button secondary" id="saveOptimizerPreset" type="button">保存</button><button class="button text-button" id="deleteOptimizerPreset" type="button" disabled>删除</button></div>
+      <p class="field-hint preset-hint">预设只保存 URL 和模型，不保存优化 API Key。切换预设会清空当前优化密钥。</p>
+      <label class="field-label" for="optimizerUrl">API URL <span class="required">*</span></label>
+      <div class="input-wrap"><span class="input-prefix">↗</span><input id="optimizerUrl" type="url" placeholder="https://你的文本服务地址/v1" required></div>
+      <p class="field-hint">支持 Base URL（含 /v1）或完整 /chat/completions 地址。</p>
+      <label class="field-label" for="optimizerKey">API KEY <span class="required">*</span></label>
+      <div class="input-wrap"><span class="input-prefix">⌘</span><input id="optimizerKey" type="password" placeholder="填写优化服务的 API Key" required><button id="revealOptimizerKey" class="reveal-key" type="button" aria-label="显示优化 API Key">◉</button></div>
+      <label class="field-label" for="optimizerModel">MODEL（文本模型）<span class="required">*</span></label>
+      <div class="input-wrap"><span class="input-prefix">✣</span><input id="optimizerModel" type="text" placeholder="填写服务支持的文本模型名称" required></div>
+      <p class="field-hint">使用 OpenAI 兼容的 Chat Completions 接口。按题材优化，结合所选尺寸和张数，保留参考图编号关系，不上传参考图片内容。</p>
+      <div class="form-divider"></div>
+      <div class="settings-actions"><button class="button secondary" id="testOptimizer" type="button">测试连接</button><button class="button text-button" id="clearOptimizerKey" type="button">清除密钥</button><button class="button primary" type="submit">完成设置</button></div>
+      <div class="status-box" id="optimizerStatusBox" role="status" aria-live="polite"><span class="status-icon">i</span><span id="optimizerStatusText">优化为可选操作。不配置或不点击优化，也可以直接生成图片。</span></div>
+    </form>
+  </dialog>
+  <dialog id="optimizationDialog" class="optimization-dialog" aria-labelledby="optimizationTitle">
+    <header class="modal-heading"><div><span class="section-label">PROMPT REVIEW</span><h2 id="optimizationTitle">确认优化结果</h2></div><button class="close-button" id="closeOptimization" type="button" aria-label="保留原提示词并关闭">×</button></header>
+    <p class="panel-intro">优化结果不会自动替换原提示词。你可以先编辑右侧内容，再选择是否采用。</p>
+    <p class="optimizer-intro" id="optimizationStrengthSummary"></p>
+    <div class="prompt-comparison">
+      <label class="prompt-column" for="originalPromptPreview"><span>原提示词</span><textarea id="originalPromptPreview" readonly></textarea></label>
+      <label class="prompt-column" for="optimizedPromptPreview"><span>优化结果（可编辑）</span><textarea id="optimizedPromptPreview" maxlength="10000"></textarea></label>
+    </div>
+    <p class="workspace-status" id="optimizationReviewStatus" role="status" aria-live="polite">确认采用后仍可撤销。</p>
+    <div class="optimization-actions"><button class="button secondary" id="keepOriginalPrompt" type="button">保留原提示词</button><button class="button primary" id="acceptOptimizedPrompt" type="button">采用优化结果</button></div>
+  </dialog>
+  <dialog id="previewDialog" class="preview-dialog" aria-label="图片预览"><button id="closePreview" class="close-button preview-close" type="button" aria-label="关闭预览">×</button><img id="previewImage" alt="生成图片大图预览"><p id="previewPrompt"></p></dialog>
+  <script src="/model-capabilities.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
