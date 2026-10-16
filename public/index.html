@@ -40,13 +40,8 @@
           <section class="history-section" id="historySection" hidden>
             <div class="history-heading">
               <h2>最近生成</h2>
-              <div class="history-toolbar">
-                <button class="text-button" id="toggleHistoryDeletion" type="button" aria-expanded="false" aria-controls="historyGrid">删除图片</button>
-                <button class="text-button history-delete" id="deleteSelectedHistory" type="button" hidden disabled>删除所选</button>
-                <button class="text-button" id="clearHistory" type="button">清空记录</button>
-              </div>
             </div>
-            <p class="history-note">最多保存 8 张至本机浏览器，点击图片查看大图，点击“删除图片”后可勾选删除。</p>
+            <p class="history-note">最多保存 8 张至本机浏览器，点击图片查看大图，可在每张图片右下角删除或下载。</p>
             <div class="history-grid" id="historyGrid"></div>
             <p class="history-status" id="historyStatus" role="status" aria-live="polite" hidden></p>
           </section>
@@ -164,6 +159,14 @@
     </div>
     <p class="workspace-status" id="optimizationReviewStatus" role="status" aria-live="polite">确认采用后仍可撤销。</p>
     <div class="optimization-actions"><button class="button secondary" id="keepOriginalPrompt" type="button">保留原提示词</button><button class="button primary" id="acceptOptimizedPrompt" type="button">采用优化结果</button></div>
+  </dialog>
+  <dialog id="deleteHistoryDialog" class="delete-history-dialog" aria-labelledby="deleteHistoryTitle" aria-describedby="deleteHistoryDescription">
+    <h2 id="deleteHistoryTitle">删除图片</h2>
+    <p id="deleteHistoryDescription">确定要删除这张图片的历史记录吗？删除后无法恢复，已下载的文件不受影响。</p>
+    <form method="dialog" class="delete-history-actions">
+      <button id="cancelHistoryDeletion" type="submit" value="cancel" autofocus>取消</button>
+      <button id="confirmHistoryDeletion" class="confirm-delete" type="submit" value="delete">确认删除</button>
+    </form>
   </dialog>
   <dialog id="previewDialog" class="preview-dialog" aria-label="图片预览"><button id="closePreview" class="close-button preview-close" type="button" aria-label="关闭预览">×</button><img id="previewImage" alt="生成图片大图预览"><p id="previewPrompt"></p></dialog>
   <dialog id="templatePromptDialog" class="template-prompt-dialog" aria-labelledby="templatePromptTitle"><button id="closeTemplatePrompt" class="close-button preview-close" type="button" aria-label="关闭模板详情">×</button><img id="templatePromptImage" alt=""><div class="template-dialog-content"><span class="template-card-category" id="templatePromptCategory"></span><h2 id="templatePromptTitle"></h2><p id="templatePromptDescription"></p><div class="template-prompt-box"><span>完整提示词</span><p id="templatePromptText"></p></div><button class="button primary template-use-button" id="useTemplateFromDialog" type="button">使用此提示词</button></div></dialog>

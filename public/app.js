@@ -9,10 +9,8 @@ const resultArea = $('#resultArea');
 const generateButton = $('#generateButton');
 const historyGrid = $('#historyGrid');
 const memoryHistory = [];
-const selectedHistoryIds = new Set();
 let displayedHistory = [];
 let historyDeleting = false;
-let historySelectionMode = false;
 const referenceImages = [];
 let loadingReferences = false;
 let generating = false;
@@ -639,23 +637,9 @@ async function readHistory() {
     return [...saved.map(item => ({ ...item, persisted: true })), ...memoryHistory].sort((a, b) => b.created - a.created).slice(0, 8);
   } catch { return memoryHistory.slice(0, 8); }
 }
-function updateHistorySelection() {
-  const toggle = $('#toggleHistoryDeletion');
-  toggle.textContent = historySelectionMode ? '取消删除' : '删除图片';
-  toggle.setAttribute('aria-expanded', String(historySelectionMode));
-  toggle.disabled = historyDeleting;
-  const button = $('#deleteSelectedHistory');
-  button.hidden = !historySelectionMode;
-  button.textContent = selectedHistoryIds.size ? `删除所选（${selectedHistoryIds.size}）` : '删除所选';
-  button.disabled = historyDeleting || !selectedHistoryIds.size;
-  $('#clearHistory').disabled = historyDeleting;
-  historyGrid.querySelectorAll('.history-select input').forEach(input => {
-    input.disabled = historyDeleting || !historySelectionMode;
-    input.closest('.history-select').hidden = !historySelectionMode;
-    if (!historySelectionMode) {
-      input.checked = false;
-      input.closest('.history-card').classList.remove('is-selected');
-    }
+function updateHistoryDeletion() {
+  historyGrid.querySelectorAll('.history-delete').forEach(button => {
+    button.disabled = historyDeleting;
   });
 }
 function setHistoryStatus(message, type = '') {
@@ -672,15 +656,10 @@ async function deleteHistoryItems(ids) {
   for (let index = memoryHistory.length - 1; index >= 0; index--) {
     if (ids.includes(memoryHistory[index].id)) memoryHistory.splice(index, 1);
   }
-  ids.forEach(id => selectedHistoryIds.delete(id));
 }
 async function renderHistory() {
   const items = (await readHistory()).filter(item => safeImageSource(item.src));
   displayedHistory = items;
-  if (!items.length) historySelectionMode = false;
-  for (const id of selectedHistoryIds) {
-    if (!items.some(item => item.id === id)) selectedHistoryIds.delete(id);
-  }
   historyGrid.replaceChildren();
   $('#historySection').hidden = !items.length;
   items.forEach(item => {
@@ -688,21 +667,6 @@ async function renderHistory() {
     if (!src) return;
     const card = document.createElement('article');
     card.className = 'history-card';
-    card.classList.toggle('is-selected', selectedHistoryIds.has(item.id));
-    const selection = document.createElement('label');
-    selection.className = 'history-select';
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = selectedHistoryIds.has(item.id);
-    checkbox.setAttribute('aria-label', `选择图片：${item.prompt || '生成图片'}`);
-    checkbox.addEventListener('change', () => {
-      if (checkbox.checked) selectedHistoryIds.add(item.id);
-      else selectedHistoryIds.delete(item.id);
-      card.classList.toggle('is-selected', checkbox.checked);
-      setHistoryStatus('');
-      updateHistorySelection();
-    });
-    selection.append(checkbox, '选择');
     const caption = document.createElement('small');
     caption.textContent = item.prompt;
     const actions = document.createElement('div');
@@ -719,11 +683,20 @@ async function renderHistory() {
       promptInput.focus();
       promptInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-    actions.append(reuse, createDownload(src));
-    card.append(createImage(src, item.prompt), selection, caption, actions);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'download-link history-delete';
+    remove.textContent = '删除';
+    remove.setAttribute('aria-label', `删除图片：${item.prompt || '生成图片'}`);
+    remove.addEventListener('click', () => confirmHistoryDeletion(item.id));
+    const imageActions = document.createElement('div');
+    imageActions.className = 'history-image-actions';
+    imageActions.append(remove, createDownload(src));
+    actions.append(reuse, imageActions);
+    card.append(createImage(src, item.prompt), caption, actions);
     historyGrid.appendChild(card);
   });
-  updateHistorySelection();
+  updateHistoryDeletion();
 }
 async function addToHistory(images, prompt) {
   const items = images.map((image, index) => ({
@@ -986,41 +959,35 @@ $('#generateForm').addEventListener('submit', async event => {
   } catch (error) { reportTaskError(task, error); }
   finally { finishTask(task); }
 });
-function queueHistoryDeletion(clearAll = false) {
-  if (historyDeleting || (!clearAll && !selectedHistoryIds.size)) return;
-  const ids = [...selectedHistoryIds];
+let pendingHistoryDeletion = null;
+function confirmHistoryDeletion(id) {
+  const dialog = $('#deleteHistoryDialog');
+  if (historyDeleting || dialog.open) return;
+  pendingHistoryDeletion = id;
+  dialog.returnValue = 'cancel';
+  dialog.showModal();
+}
+$('#deleteHistoryDialog').addEventListener('close', event => {
+  const id = pendingHistoryDeletion;
+  pendingHistoryDeletion = null;
+  if (event.target.returnValue === 'delete' && id !== null) queueHistoryDeletion(id);
+});
+function queueHistoryDeletion(id) {
+  if (historyDeleting) return;
   historyDeleting = true;
   setHistoryStatus('正在删除…');
-  updateHistorySelection();
+  updateHistoryDeletion();
   historyQueue = historyQueue.then(async () => {
-    if (clearAll) {
-      try { await historyStore('readwrite', store => store.clear()); }
-      catch (error) {
-        if (displayedHistory.some(item => item.persisted)) throw error;
-      }
-      memoryHistory.length = 0;
-      selectedHistoryIds.clear();
-    } else {
-      await deleteHistoryItems(ids);
-    }
+    await deleteHistoryItems([id]);
     await renderHistory();
-    setHistoryStatus(clearAll ? '已清空记录。' : '已删除所选图片。');
+    setHistoryStatus('已删除图片。');
   }).catch(() => {
     setHistoryStatus('删除失败，请检查浏览器存储权限后重试。', 'error');
   }).finally(() => {
     historyDeleting = false;
-    updateHistorySelection();
+    updateHistoryDeletion();
   });
 }
-$('#toggleHistoryDeletion').addEventListener('click', () => {
-  if (historyDeleting) return;
-  historySelectionMode = !historySelectionMode;
-  if (!historySelectionMode) selectedHistoryIds.clear();
-  setHistoryStatus('');
-  updateHistorySelection();
-});
-$('#deleteSelectedHistory').addEventListener('click', () => queueHistoryDeletion());
-$('#clearHistory').addEventListener('click', () => queueHistoryDeletion(true));
 $('#closePreview').addEventListener('click', () => $('#previewDialog').close());
 $('#previewDialog').addEventListener('click', event => {
   if (event.target === $('#previewDialog')) event.target.close();
