@@ -187,6 +187,7 @@ function updateActionState() {
   const busy = generating || optimizing || loadingReferences;
   generateButton.disabled = busy;
   $('#optimizeButton').disabled = busy;
+  $('#templatesButton').disabled = busy;
   const capabilities = currentCapabilities();
   $('#addReference').disabled = busy || referenceImages.length >= capabilities.maxReferences;
   $('#undoOptimize').disabled = busy;
@@ -989,18 +990,18 @@ function renderTemplates() {
   grid.replaceChildren(...templates.map(template => {
     const card = document.createElement('article');
     card.className = 'template-card';
-    const imageWrap = document.createElement('div');
+    const imageWrap = document.createElement('button');
+    imageWrap.type = 'button';
     imageWrap.className = 'template-image-wrap';
+    imageWrap.setAttribute('aria-label', '查看“' + template.title + '”模板详情');
+    const accents = { cinematic: '#382c52', editorial: '#d9bac2', illustration: '#b3c7a3', '3d': '#d5b7a7', architecture: '#a9b8bd', nature: '#a4bc98', product: '#e2cbb7', graphic: '#d49764', portrait: '#d5b7a8' };
+    imageWrap.style.setProperty('--template-accent', accents[template.category] || '#c0b4dd');
     imageWrap.append(templateImage(template));
     const category = document.createElement('span');
     category.className = 'template-card-category';
     category.textContent = template.categoryLabel;
     imageWrap.append(category);
     imageWrap.addEventListener('click', () => openTemplateDialog(template));
-    imageWrap.setAttribute('role', 'button');
-    imageWrap.setAttribute('aria-label', '查看“' + template.title + '”模板详情');
-    imageWrap.tabIndex = 0;
-    imageWrap.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTemplateDialog(template); } });
     const body = document.createElement('div');
     body.className = 'template-card-body';
     const title = document.createElement('h2');
@@ -1038,6 +1039,8 @@ function useTemplate(template) {
   $('#templatePromptDialog').open && $('#templatePromptDialog').close();
   closeTemplatesPage();
   promptInput.value = template.prompt;
+  promptBeforeOptimization = null;
+  $('#undoOptimize').hidden = true;
   updateCounter();
   setStatus('已载入“' + template.title + '”提示词模板，可继续修改后生成。', 'success');
   promptInput.focus();

@@ -199,7 +199,7 @@ dialog::backdrop { background: rgba(29, 22, 47, .4); backdrop-filter: blur(5px);
 .template-filter:hover, .template-filter[aria-selected=true] { border-color: var(--purple); background: var(--soft); color: var(--purple); }
 .template-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
 .template-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: var(--card); box-shadow: var(--shadow); }
-.template-image-wrap { position: relative; aspect-ratio: 4 / 3; overflow: hidden; background: var(--soft); }
+.template-image-wrap { position: relative; display: block; width: 100%; padding: 0; border: 0; aspect-ratio: 4 / 3; overflow: hidden; background: linear-gradient(145deg, var(--template-accent, var(--soft)), var(--soft) 82%); text-align: left; cursor: zoom-in; }
 .template-image-wrap img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .3s ease; }
 .template-card:hover .template-image-wrap img { transform: scale(1.035); }
 .template-image-wrap img.image-load-error { opacity: 0; }
@@ -218,7 +218,8 @@ dialog::backdrop { background: rgba(29, 22, 47, .4); backdrop-filter: blur(5px);
 .template-empty-icon { width: 56px; height: 56px; display: grid; place-items: center; margin: 0 auto 16px; border-radius: 17px; background: var(--soft); color: var(--purple); font-size: 28px; }
 .template-empty h2 { margin: 0 0 8px; color: var(--ink); font-size: 18px; font-weight: 600; }
 .template-empty p { margin: 0; font-size: 12px; }
-.template-prompt-dialog { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr); gap: 22px; width: min(900px, calc(100vw - 32px)); padding: 23px; }
+.template-prompt-dialog { grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr); gap: 22px; width: min(900px, calc(100vw - 32px)); padding: 23px; }
+.template-prompt-dialog[open] { display: grid; }
 .template-prompt-dialog > img { width: 100%; height: 100%; min-height: 280px; max-height: 62vh; object-fit: cover; border-radius: 10px; background: var(--soft); }
 .template-dialog-content { align-self: center; min-width: 0; padding: 14px 6px 6px 0; }
 .template-dialog-content h2 { margin: 10px 0 8px; font-size: 24px; }
@@ -298,7 +299,7 @@ dialog::backdrop { background: rgba(29, 22, 47, .4); backdrop-filter: blur(5px);
   .template-card-actions { gap: 7px; margin-top: 11px; }
   .template-card-actions button { font-size: 10px; }
   .template-card-actions .template-use { padding: 0 7px; font-size: 10px; }
-  .template-prompt-dialog { display: block; padding: 17px; }
+  .template-prompt-dialog[open] { display: block; padding: 17px; }
   .template-prompt-dialog > img { height: 38vh; min-height: 180px; max-height: none; margin-bottom: 14px; }
   .template-dialog-content { padding: 0; }
   .template-dialog-content h2 { font-size: 20px; }
