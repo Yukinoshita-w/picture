@@ -71,8 +71,10 @@ function buildOptimizationInstructions({ referenceCount, referenceGuidance = [],
     if (lines.length) instructions += '\n用户为参考图提供了以下文字说明。仅依据这些说明建立编号关系，不要声称看过图片：\n' + lines.join('\n');
   }
   if (canvasSize && !['default', 'auto'].includes(canvasSize)) {
-    const ratios = { '256x256': '1:1', '512x512': '1:1', '1024x1024': '1:1', '1536x1024': '3:2', '1024x1536': '2:3', '1792x1024': '7:4', '1024x1792': '4:7' };
-    instructions += '\n当前页面画布尺寸为 ' + canvasSize + '，比例为 ' + ratios[canvasSize] + '。按此画布组织构图，不输出相冲突的实际尺寸或比例。';
+    const [width, height] = canvasSize.split('x').map(Number);
+    const gcd = (a, b) => b ? gcd(b, a % b) : a;
+    const divisor = gcd(width, height);
+    instructions += '\n当前页面画布尺寸为 ' + canvasSize + '，比例为 ' + (width / divisor) + ':' + (height / divisor) + '。按此画布组织构图，不输出相冲突的实际尺寸或比例。';
   } else instructions += '\n当前页面未指定固定画布比例；保留用户明确的比例意图，不擅自添加比例或输出尺寸。';
   if (imageCount) instructions += '\n当前页面请求生成 ' + imageCount + ' 张图片。这是输出图片张数，不是单张画面中的人物、动物或物体数量，不能因此增减主体。';
   return instructions;

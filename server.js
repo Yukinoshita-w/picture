@@ -3,7 +3,8 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { buildOptimizationInstructions } = require('./prompt-optimizer');
-const { resolve: resolveCapabilities } = require('./public/model-capabilities');
+const generationRequirements = require('./public/generation-requirements');
+const { resolve: resolveCapabilities, supportsSize, isCustomSize } = require('./public/model-capabilities');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_RESPONSE = 80 * 1024 * 1024;
@@ -214,11 +215,9 @@ async function generateImage(body, signal) {
   const references = referenceImages(body.references);
   if (references.length > capabilities.maxReferences) throw new ApiError(capabilities.maxReferences ? '当前能力配置最多支持 ' + capabilities.maxReferences + ' 张参考图' : '当前能力配置不支持参考图，请更换配置或移除参考图');
   if (n > capabilities.maxCount) throw new ApiError('当前能力配置每次最多生成 ' + capabilities.maxCount + ' 张图片');
-  const finalPrompt = prompt + formatReferenceGuidance(references.map(reference => reference.guidance));
-  if (finalPrompt.length > 10000) throw new ApiError('提示词和参考图说明合计最多 10000 个字符');
-  const requestBody = { model, prompt: finalPrompt, n };
+  const requestBody = { model, n };
   if (body.size && body.size !== 'default') {
-    if (!capabilities.sizes.includes(body.size)) throw new ApiError('当前能力配置不支持所选图片尺寸，请使用由接口决定');
+    if (!supportsSize(capabilities, body.size)) throw new ApiError('当前能力配置不支持所选图片尺寸，请使用由接口决定');
     requestBody.size = body.size;
   }
   if (body.quality && body.quality !== 'default') {
@@ -230,6 +229,8 @@ async function generateImage(body, signal) {
   if (format !== 'auto' && !capabilities.responseFormats.includes(format)) throw new ApiError('当前能力配置不支持所选返回格式，请使用自动');
   // GPT Image returns base64 and does not accept response_format.
   if (format !== 'auto') requestBody.response_format = format;
+  requestBody.prompt = prompt + formatReferenceGuidance(references.map(reference => reference.guidance)) + generationRequirements({ size: body.size, quality: body.quality, n });
+  if (requestBody.prompt.length > 10000) throw new ApiError('提示词、参考图说明和生成要求合计最多 10000 个字符，请缩短提示词');
   let data;
   if (references.length) {
     const editEndpoint = new URL(endpoint);
@@ -270,7 +271,7 @@ async function optimizePrompt(body, signal) {
   const referenceCount = body.referenceCount ?? 0;
   if (!Number.isInteger(referenceCount) || referenceCount < 0 || referenceCount > 4) throw new ApiError('参考图数量必须为 0–4');
   const canvasSize = body.canvasSize || 'default';
-  if (!['default', 'auto', '256x256', '512x512', '1024x1024', '1536x1024', '1024x1536', '1792x1024', '1024x1792'].includes(canvasSize)) throw new ApiError('画布尺寸无效');
+  if (!['default', 'auto'].includes(canvasSize) && !isCustomSize(canvasSize)) throw new ApiError('画布尺寸无效');
   const imageCount = body.imageCount ?? 1;
   if (!Number.isInteger(imageCount) || imageCount < 1 || imageCount > 4) throw new ApiError('生成张数必须为 1–4');
   const referenceGuidance = normalizeReferenceGuidance(body.referenceGuidance, referenceCount);

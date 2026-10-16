@@ -20,6 +20,7 @@ let promptBeforeOptimization = null;
 let pendingOptimization = null;
 let customCapabilitiesInitialized = false;
 let historyQueue = Promise.resolve();
+const sizePicker = createSizePicker({ select: $('#size'), getCapabilities: currentCapabilities, onChange: saveSettings });
 const safeStorage = {
   get(key) { try { return localStorage.getItem(key); } catch { return null; } },
   set(key, value) { try { localStorage.setItem(key, value); } catch { /* Private browsing may restrict storage. */ } }
@@ -77,7 +78,10 @@ function imagePresetConfig() {
 function optimizerPresetConfig() { return { apiUrl: optimizerSettings.apiUrl.value.trim(), model: optimizerSettings.model.value.trim() }; }
 function setSelectIfAvailable(selector, value, fallback = 'default') {
   const select = $(selector);
+  if (selector === '#size' && ModelCapabilities.isCustomSize(value) && ModelCapabilities.supportsSize(currentCapabilities(), value) && ![...select.options].some(option => option.value === value)) select.add(new Option(value.replace('x', ' × '), value));
   select.value = [...select.options].some(option => option.value === String(value)) ? String(value) : fallback;
+  if (selector === '#size') sizePicker.sync();
+  renderGenerationRequirements();
 }
 function applyImagePreset(name) {
   if (generating || optimizing || loadingReferences) return;
@@ -397,6 +401,7 @@ async function addReferenceFiles(files) {
   }
 }
 function saveSettings() {
+  renderGenerationRequirements();
   safeStorage.set('prompt-studio-url', settings.apiUrl.value.trim());
   safeStorage.set('prompt-studio-model', settings.model.value.trim());
   safeStorage.set('prompt-studio-capabilities', JSON.stringify(readCapabilityConfig()));
@@ -726,10 +731,16 @@ function fillOptions(select, entries) {
 function readCapabilityConfig() {
   if ($('#capabilityMode').value === 'auto') return { mode: 'auto' };
   const selected = id => [...$(id).querySelectorAll('input:checked')].map(input => input.value);
-  return { mode: $('#capabilityMode').value, sizes: selected('#capabilitySizes'), qualities: selected('#capabilityQualities'), responseFormats: selected('#capabilityFormats'), maxCount: Number($('#capabilityMaxCount').value), maxReferences: Number($('#capabilityMaxReferences').value), imageField: $('#capabilityImageField').value };
+  return { mode: $('#capabilityMode').value, sizes: selected('#capabilitySizes'), customSizes: $('#capabilityCustomSizes').checked, qualities: selected('#capabilityQualities'), responseFormats: selected('#capabilityFormats'), maxCount: Number($('#capabilityMaxCount').value), maxReferences: Number($('#capabilityMaxReferences').value), imageField: $('#capabilityImageField').value };
 }
 function currentCapabilities() { return ModelCapabilities.resolve(settings.model.value, readCapabilityConfig()); }
+function renderGenerationRequirements() {
+  const text = generationRequirements({ size: $('#size').value, quality: $('#quality').value, n: $('#count').value }).trim();
+  $('#generationRequirementsText').textContent = text;
+  $('#generationRequirementsPreview').hidden = !text;
+}
 function fillCapabilityEditor(capabilities) {
+  $('#capabilityCustomSizes').checked = capabilities.customSizes === true;
   for (const [id, key, allowed] of [['#capabilitySizes', 'sizes', ModelCapabilities.SIZES], ['#capabilityQualities', 'qualities', ModelCapabilities.QUALITIES], ['#capabilityFormats', 'responseFormats', ModelCapabilities.FORMATS]]) {
     $(id).replaceChildren(...allowed.map(value => {
       const label = document.createElement('label');
@@ -750,16 +761,21 @@ function refreshModelOptions() {
   $('#customCapabilities').disabled = !custom;
   const sizeLabels = { auto: '自动', '1024x1024': '1 : 1 · 1024×1024', '1536x1024': '横版 · 1536×1024', '1024x1536': '竖版 · 1024×1536', '1792x1024': '横版 · 1792×1024', '1024x1792': '竖版 · 1024×1792' };
   const qualityLabels = { auto: '自动', low: '低', medium: '中', high: '高', standard: '标准', hd: '高清 HD' };
-  fillOptions($('#size'), [['default', '由接口决定'], ...capabilities.sizes.map(value => [value, sizeLabels[value] || value])]);
+  const sizeEntries = [['default', '由接口决定'], ...capabilities.sizes.map(value => [value, sizeLabels[value] || value])];
+  const selectedSize = $('#size').value;
+  if (ModelCapabilities.isCustomSize(selectedSize) && ModelCapabilities.supportsSize(capabilities, selectedSize) && !capabilities.sizes.includes(selectedSize)) sizeEntries.push([selectedSize, selectedSize.replace('x', ' × ')]);
+  fillOptions($('#size'), sizeEntries);
+  sizePicker.sync();
   fillOptions($('#quality'), [['default', '由接口决定'], ...capabilities.qualities.map(value => [value, qualityLabels[value]])]);
   fillOptions($('#count'), Array.from({ length: capabilities.maxCount }, (_, index) => [String(index + 1), (index + 1) + ' 张']));
   fillOptions($('#responseFormat'), [['auto', '自动 · 使用接口默认值'], ...capabilities.responseFormats.map(value => [value, value === 'url' ? '图片链接 · url' : 'Base64 · b64_json'])]);
-  $('#size').disabled = !capabilities.sizes.length;
+  $('#size').disabled = !capabilities.sizes.length && !capabilities.customSizes;
   $('#quality').disabled = !capabilities.qualities.length;
   $('#count').disabled = capabilities.maxCount === 1;
   $('#responseFormat').disabled = !capabilities.responseFormats.length;
   $('#capabilityImageField').disabled = capabilities.maxReferences === 0;
   $('#capabilitySummary').textContent = '当前：最多生成 ' + capabilities.maxCount + ' 张；' + (capabilities.maxReferences ? '参考图最多 ' + capabilities.maxReferences + ' 张' : '不支持参考图') + '。尺寸、画质及返回格式均可使用接口默认值。';
+  renderGenerationRequirements();
   updateActionState();
   updateReferences();
 }
@@ -814,7 +830,7 @@ settings.apiUrl.addEventListener('change', saveSettings);
 settings.apiKey.addEventListener('input', saveSettings);
 settings.model.addEventListener('change', saveSettings);
 settings.model.addEventListener('input', refreshModelOptions);
-for (const selector of ['#size', '#quality', '#count', '#responseFormat']) $(selector).addEventListener('change', saveSettings);
+for (const selector of ['#quality', '#count', '#responseFormat']) $(selector).addEventListener('change', saveSettings);
 $('#settingsForm').addEventListener('submit', event => {
   event.preventDefault();
   saveSettings();
@@ -996,10 +1012,10 @@ const templateCategories = [{ id: 'all', label: '全部风格' }, ...[...new Map
 let activeTemplateCategory = 'all';
 let activeTemplate = null;
 const routeTitles = {
-  create: '单图创作 · Prompt Studio',
-  series: '系列策划 · Prompt Studio',
-  styles: '风格库 · Prompt Studio',
-  gallery: '展馆 · Prompt Studio'
+  create: '图片创作 · Prompt Studio',
+  series: '系列创作 · Prompt Studio',
+  styles: '风格模板 · Prompt Studio',
+  gallery: '作品画廊 · Prompt Studio'
 };
 function currentRoute() {
   const route = window.location.hash.slice(1);

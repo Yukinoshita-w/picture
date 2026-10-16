@@ -14,10 +14,10 @@
       <span class="site-brand-copy"><strong>Prompt Studio</strong><span>AI 生图工作台</span></span>
     </a>
     <nav class="site-nav" aria-label="主导航">
-      <a class="site-nav-link" href="#create" data-route="create">单图创作</a>
-      <a class="site-nav-link" href="#series" data-route="series">系列策划</a>
-      <a class="site-nav-link" href="#styles" data-route="styles" id="templatesButton">风格库</a>
-      <a class="site-nav-link" href="#gallery" data-route="gallery">展馆</a>
+      <a class="site-nav-link" href="#create" data-route="create">图片创作</a>
+      <a class="site-nav-link" href="#series" data-route="series">系列创作</a>
+      <a class="site-nav-link" href="#styles" data-route="styles" id="templatesButton">风格模板</a>
+      <a class="site-nav-link" href="#gallery" data-route="gallery">作品画廊</a>
     </nav>
     <div class="header-tools" aria-label="工作台工具">
       <button class="tool-button" id="settingsButton" type="button" title="API 设置" aria-label="打开 API 设置" aria-haspopup="dialog" aria-controls="settingsDialog">
@@ -58,7 +58,7 @@
           <div class="controls-row">
             <button class="attach-button" id="addReference" type="button" aria-label="添加参考图片" title="添加、拖入或粘贴参考图片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg><span>参考图</span></button>
             <input id="referenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
-            <div class="control"><label for="size">尺寸</label><select id="size" name="size"><option value="default">由接口决定</option></select></div>
+            <div class="control size-control"><span class="control-label">尺寸</span><button id="sizeButton" class="size-trigger" type="button" aria-haspopup="dialog" aria-controls="sizeDialog"><span id="sizeButtonLabel">由接口决定</span><span aria-hidden="true">⌄</span></button><select id="size" name="size" hidden aria-label="图片尺寸"><option value="default">由接口决定</option></select></div>
             <div class="control"><label for="quality">画质</label><select id="quality" name="quality"><option value="default">由接口决定</option></select></div>
             <div class="control"><label for="count">数量</label><select id="count" name="n"><option value="1">1 张</option><option value="2">2 张</option><option value="3">3 张</option><option value="4">4 张</option></select></div>
             <div class="control strength-control"><label for="optimizationStrength">优化强度</label><select id="optimizationStrength" aria-label="提示词优化强度" title="只影响手动提示词优化"><option value="light">轻度润色</option><option value="standard" selected>标准优化</option><option value="rich">丰富细节</option></select></div>
@@ -69,11 +69,12 @@
       <div class="task-progress" id="taskProgress" hidden><span id="taskElapsed"></span><span>取消后服务商仍可能继续处理或计费。</span></div>
       <p class="reference-hint" id="referenceHint" hidden>支持 PNG / JPEG / WebP，最多 4 张，单张 10 MB、总计 20 MB。可指定每张图用途及需要保留或修改的内容。</p>
       <p class="workspace-status" id="workspaceStatus" role="status" aria-live="polite">先点击右上角设置，填写 API 信息即可开始生成。</p>
+      <details id="generationRequirementsPreview" class="generation-requirements" hidden><summary>将随提示词发送的生成要求</summary><p id="generationRequirementsText"></p></details>
     </section>
   </main>
 
   <section id="seriesPage" class="route-placeholder" data-page="series" hidden aria-labelledby="seriesTitle">
-    <div class="route-placeholder-card"><span class="section-label">SERIES PLANNING</span><h1 id="seriesTitle">系列策划</h1><p>系列策划页面正在准备中。</p></div>
+    <div class="route-placeholder-card"><span class="section-label">SERIES CREATION</span><h1 id="seriesTitle">系列创作</h1><p>系列创作页面正在准备中。</p></div>
   </section>
 
   <section id="templatesPage" class="templates-page" data-page="styles" hidden aria-labelledby="templatesTitle">
@@ -91,7 +92,7 @@
   </section>
 
   <section id="galleryPage" class="route-placeholder" data-page="gallery" hidden aria-labelledby="galleryPageTitle">
-    <div class="route-placeholder-card"><span class="section-label">GALLERY</span><h1 id="galleryPageTitle">展馆</h1><p>展馆页面正在准备中。生成记录可先在单图创作页面查看。</p><a class="button primary" href="#create">前往单图创作</a></div>
+    <div class="route-placeholder-card"><span class="section-label">GALLERY</span><h1 id="galleryPageTitle">作品画廊</h1><p>作品画廊页面正在准备中。生成记录可先在图片创作页面查看。</p><a class="button primary" href="#create">前往图片创作</a></div>
   </section>
 
   <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle">
@@ -115,6 +116,8 @@
           <fieldset id="customCapabilities" class="capability-fields" hidden disabled>
             <legend>允许的接口参数</legend>
             <fieldset class="capability-options"><legend>尺寸 size（不勾选则不发送）</legend><div id="capabilitySizes" class="capability-choices"></div></fieldset>
+            <label class="custom-size-capability"><input id="capabilityCustomSizes" type="checkbox">支持自定义尺寸（按服务商文档开启）</label>
+            <p class="field-hint">开启后可选择更多比例、2K / 4K 或输入宽高。应用接受 64–8192 像素、8 的倍数，实际范围仍以接口为准。</p>
             <fieldset class="capability-options"><legend>画质 quality（不勾选则不发送）</legend><div id="capabilityQualities" class="capability-choices"></div></fieldset>
             <fieldset class="capability-options"><legend>返回格式 response_format（不勾选则不发送）</legend><div id="capabilityFormats" class="capability-choices"></div></fieldset>
             <div class="capability-limits">
@@ -160,9 +163,27 @@
     <p class="workspace-status" id="optimizationReviewStatus" role="status" aria-live="polite">确认采用后仍可撤销。</p>
     <div class="optimization-actions"><button class="button secondary" id="keepOriginalPrompt" type="button">保留原提示词</button><button class="button primary" id="acceptOptimizedPrompt" type="button">采用优化结果</button></div>
   </dialog>
+  <dialog id="sizeDialog" class="size-dialog" aria-labelledby="sizeDialogTitle">
+    <header class="size-heading"><div><h2 id="sizeDialogTitle">设置图像尺寸</h2><p id="sizeCurrent" aria-live="polite">当前：由接口决定</p></div><button id="closeSizeDialog" class="size-close" type="button" aria-label="关闭尺寸设置">×</button></header>
+    <button id="sizeDefault" class="size-option size-default" type="button">由接口决定</button>
+    <div class="size-tabs" role="group" aria-label="尺寸设置方式"><button type="button" data-size-mode="auto">自动</button><button type="button" data-size-mode="ratio">按比例</button><button type="button" data-size-mode="custom">自定义宽高</button></div>
+    <div id="sizeAutoPanel"><p class="size-hint">自动选择画布尺寸；接口未声明支持自动尺寸时，使用接口默认值。</p></div>
+    <div id="sizeRatioPanel" hidden>
+      <p class="size-label">基准分辨率</p><div id="sizeResolutions" class="size-resolutions" role="group" aria-label="基准分辨率"></div>
+      <p class="size-label">图像比例</p><div id="sizeRatios" class="size-ratios" role="group" aria-label="图像比例"></div>
+      <button id="sizeCustomRatio" class="size-option size-default" type="button" aria-expanded="false" aria-controls="sizeRatioInputs">自定义比例</button>
+      <div id="sizeRatioInputs" class="size-inputs" hidden><label>比例宽<input id="sizeRatioWidth" type="number" min="1" max="100" step="1" value="1"></label><span aria-hidden="true">:</span><label>比例高<input id="sizeRatioHeight" type="number" min="1" max="100" step="1" value="1"></label></div>
+      <p class="size-hint">按长边计算分辨率，优先匹配接口标准尺寸；计算结果对齐至 8 像素。</p>
+    </div>
+    <div id="sizeCustomPanel" hidden><div class="size-inputs"><label>宽度（px）<input id="sizeWidth" type="number" min="64" max="8192" step="8" value="1024"></label><span aria-hidden="true">×</span><label>高度（px）<input id="sizeHeight" type="number" min="64" max="8192" step="8" value="1024"></label></div><p class="size-hint">每边 64–8192 像素，须为 8 的倍数。</p></div>
+    <div id="sizeSupportedPanel"><p class="size-label">接口标准尺寸</p><div id="sizeSupported" class="size-supported"></div></div>
+    <p id="sizeCapabilityHint" class="size-hint" hidden>当前配置仅支持标准尺寸。若服务商支持更多尺寸，可在 API 设置 → 自定义能力中开启“支持自定义尺寸”。</p>
+    <p id="sizeError" class="size-error" role="status" hidden></p>
+    <div class="size-footer"><button id="cancelSizeDialog" type="button" class="button secondary">取消</button><button id="applySize" type="button" class="button primary">应用尺寸</button></div>
+  </dialog>
   <dialog id="deleteHistoryDialog" class="delete-history-dialog" aria-labelledby="deleteHistoryTitle" aria-describedby="deleteHistoryDescription">
     <h2 id="deleteHistoryTitle">删除图片</h2>
-    <p id="deleteHistoryDescription">确定要删除这张图片的历史记录吗？删除后无法恢复，已下载的文件不受影响。</p>
+    <p id="deleteHistoryDescription">确定要删除该张图片的记录吗？删除后无法恢复。</p>
     <form method="dialog" class="delete-history-actions">
       <button id="cancelHistoryDeletion" type="submit" value="cancel" autofocus>取消</button>
       <button id="confirmHistoryDeletion" class="confirm-delete" type="submit" value="delete">确认删除</button>
@@ -172,6 +193,8 @@
   <dialog id="templatePromptDialog" class="template-prompt-dialog" aria-labelledby="templatePromptTitle"><button id="closeTemplatePrompt" class="close-button preview-close" type="button" aria-label="关闭模板详情">×</button><img id="templatePromptImage" alt=""><div class="template-dialog-content"><span class="template-card-category" id="templatePromptCategory"></span><h2 id="templatePromptTitle"></h2><p id="templatePromptDescription"></p><div class="template-prompt-box"><span>完整提示词</span><p id="templatePromptText"></p></div><button class="button primary template-use-button" id="useTemplateFromDialog" type="button">使用此提示词</button></div></dialog>
   <script src="/style-templates.js"></script>
   <script src="/model-capabilities.js"></script>
+  <script src="/generation-requirements.js"></script>
+  <script src="/size-picker.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
