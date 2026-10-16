@@ -38,9 +38,17 @@
             <div class="empty-state"><div class="empty-icon" aria-hidden="true">✧</div><h2>让想象，出现在这里</h2><p>点击右上角设置连接 API，然后在下方描述你想要的画面。</p><span class="empty-caption">你的下一张作品，从一句话开始</span></div>
           </section>
           <section class="history-section" id="historySection" hidden>
-            <div class="history-heading"><h2>最近生成</h2><button class="text-button" id="clearHistory" type="button">清空记录</button></div>
-            <p class="history-note">最多保存 8 张至本机浏览器，点击图片查看大图。</p>
+            <div class="history-heading">
+              <h2>最近生成</h2>
+              <div class="history-toolbar">
+                <button class="text-button" id="toggleHistoryDeletion" type="button" aria-expanded="false" aria-controls="historyGrid">删除图片</button>
+                <button class="text-button history-delete" id="deleteSelectedHistory" type="button" hidden disabled>删除所选</button>
+                <button class="text-button" id="clearHistory" type="button">清空记录</button>
+              </div>
+            </div>
+            <p class="history-note">最多保存 8 张至本机浏览器，点击图片查看大图，点击“删除图片”后可勾选删除。</p>
             <div class="history-grid" id="historyGrid"></div>
+            <p class="history-status" id="historyStatus" role="status" aria-live="polite" hidden></p>
           </section>
         </div>
       </section>
