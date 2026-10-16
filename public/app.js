@@ -587,6 +587,21 @@ function createDownload(src) {
   button.addEventListener('click', () => downloadImage(src, button));
   return button;
 }
+function reusePrompt(prompt) {
+  if (optimizing) return;
+  promptInput.value = String(prompt || '').slice(0, 10000);
+  promptBeforeOptimization = null;
+  $('#undoOptimize').hidden = true;
+  updateCounter();
+  navigateTo('create');
+  requestAnimationFrame(() => { promptInput.focus(); promptInput.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+}
+function createReuse(prompt) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'download-link'; button.textContent = '复用提示词';
+  button.addEventListener('click', () => reusePrompt(prompt));
+  return button;
+}
 function renderResults(images, prompt) {
   const grid = document.createElement('div');
   grid.className = 'result-grid';
@@ -601,7 +616,10 @@ function renderResults(images, prompt) {
     actions.className = 'result-actions';
     const label = document.createElement('span');
     label.textContent = 'IMAGE ' + String(index + 1).padStart(2, '0');
-    actions.append(label, createDownload(src));
+    const promptActions = document.createElement('div');
+    promptActions.className = 'result-prompt-actions';
+    promptActions.append(createReuse(prompt), artGallery.submitButton({ id: image.id, src, prompt, created: image.created }));
+    actions.append(label, promptActions, createDownload(src));
     card.append(imageEl, actions);
     if (image.revised_prompt) {
       const revised = document.createElement('p');
@@ -676,18 +694,9 @@ async function renderHistory() {
     caption.textContent = item.prompt;
     const actions = document.createElement('div');
     actions.className = 'history-actions';
-    const reuse = document.createElement('button');
-    reuse.type = 'button';
-    reuse.textContent = '复用提示词';
-    reuse.addEventListener('click', () => {
-      if (optimizing) return;
-      promptInput.value = String(item.prompt || '').slice(0, 10000);
-      promptBeforeOptimization = null;
-      $('#undoOptimize').hidden = true;
-      updateCounter();
-      promptInput.focus();
-      promptInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
+    const promptActions = document.createElement('div');
+    promptActions.className = 'history-prompt-actions';
+    promptActions.append(createReuse(item.prompt), artGallery.submitButton(item));
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'download-link history-delete';
@@ -697,7 +706,7 @@ async function renderHistory() {
     const imageActions = document.createElement('div');
     imageActions.className = 'history-image-actions';
     imageActions.append(remove, createDownload(src));
-    actions.append(reuse, imageActions);
+    actions.append(promptActions, imageActions);
     card.append(createImage(src, item.prompt), caption, actions);
     historyGrid.appendChild(card);
   });
@@ -705,7 +714,7 @@ async function renderHistory() {
 }
 async function addToHistory(images, prompt) {
   const items = images.map((image, index) => ({
-    id: crypto.randomUUID(), src: imageSource(image), prompt, created: Date.now() + index
+    id: image.id || crypto.randomUUID(), src: imageSource(image), prompt, created: image.created || Date.now() + index
   })).filter(item => item.src);
   try {
     await historyStore('readwrite', store => items.forEach(item => store.put(item)));
@@ -969,9 +978,10 @@ $('#generateForm').addEventListener('submit', async event => {
     }, task.controller.signal);
     if (!taskIsCurrent(task)) return;
     if (!data.images?.length || !data.images.every(image => imageSource(image))) throw new Error('接口没有返回有效的图片');
-    renderResults(data.images, prompt);
+    const images = data.images.map((image, index) => ({ ...image, id: crypto.randomUUID(), created: Date.now() + index }));
+    renderResults(images, prompt);
     setStatus('生成完成，共 ' + data.images.length + ' 张图片。', 'success');
-    historyQueue = historyQueue.then(() => addToHistory(data.images, prompt)).catch(() => {});
+    historyQueue = historyQueue.then(() => addToHistory(images, prompt)).catch(() => {});
   } catch (error) { reportTaskError(task, error); }
   finally { finishTask(task); }
 });
@@ -1029,6 +1039,7 @@ function renderRoute() {
     else link.removeAttribute('aria-current');
   });
   document.title = routeTitles[route];
+  artGallery.setVisible(route === 'gallery');
   if (route === 'styles') { renderTemplateFilters(); renderTemplates(); }
   window.scrollTo(0, 0);
 }
@@ -1190,6 +1201,8 @@ for (const kind of ['image', 'optimizer']) {
 }
 updateActionState();
 applyTheme(safeStorage.get('prompt-studio-theme') === 'dark');
+const artGallery = createArtGallery({ safeImageSource, preview: openPreview, download: downloadImage, reuse: reusePrompt, notify: setStatus });
+artGallery.init();
 renderRoute();
 renderHistory();
 fetch('/api/health').then(response => {
