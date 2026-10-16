@@ -938,6 +938,116 @@ $('#closePreview').addEventListener('click', () => $('#previewDialog').close());
 $('#previewDialog').addEventListener('click', event => {
   if (event.target === $('#previewDialog')) event.target.close();
 });
+const templateCategories = [{ id: 'all', label: '全部风格' }, ...[...new Map(StyleTemplates.map(template => [template.category, template.categoryLabel])).entries()].map(([id, label]) => ({ id, label }))];
+let activeTemplateCategory = 'all';
+let activeTemplate = null;
+function openTemplatesPage() {
+  $('.workspace').hidden = true;
+  $('#templatesPage').hidden = false;
+  renderTemplateFilters();
+  renderTemplates();
+  window.scrollTo(0, 0);
+}
+function closeTemplatesPage() {
+  $('#templatesPage').hidden = true;
+  $('.workspace').hidden = false;
+  promptInput.focus();
+}
+function renderTemplateFilters() {
+  const filters = $('#templateFilters');
+  filters.replaceChildren(...templateCategories.map(category => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'template-filter';
+    button.textContent = category.label;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(activeTemplateCategory === category.id));
+    button.addEventListener('click', () => { activeTemplateCategory = category.id; renderTemplateFilters(); renderTemplates(); });
+    return button;
+  }));
+}
+function templateMatches(template, search, category) {
+  if (category !== 'all' && template.category !== category) return false;
+  if (!search) return true;
+  return [template.title, template.categoryLabel, template.description, template.prompt].join(' ').toLowerCase().includes(search.toLowerCase());
+}
+function templateImage(template) {
+  const image = document.createElement('img');
+  image.src = template.image;
+  image.alt = template.title + '风格参考图';
+  image.loading = 'lazy';
+  image.referrerPolicy = 'no-referrer';
+  image.addEventListener('error', () => image.classList.add('image-load-error'));
+  return image;
+}
+function renderTemplates() {
+  const search = $('#templateSearch').value.trim();
+  const templates = StyleTemplates.filter(template => templateMatches(template, search, activeTemplateCategory));
+  $('#templatesCount').textContent = '共 ' + templates.length + ' 个模板';
+  $('#templateEmpty').hidden = templates.length > 0;
+  const grid = $('#templateGrid');
+  grid.replaceChildren(...templates.map(template => {
+    const card = document.createElement('article');
+    card.className = 'template-card';
+    const imageWrap = document.createElement('div');
+    imageWrap.className = 'template-image-wrap';
+    imageWrap.append(templateImage(template));
+    const category = document.createElement('span');
+    category.className = 'template-card-category';
+    category.textContent = template.categoryLabel;
+    imageWrap.append(category);
+    imageWrap.addEventListener('click', () => openTemplateDialog(template));
+    imageWrap.setAttribute('role', 'button');
+    imageWrap.setAttribute('aria-label', '查看“' + template.title + '”模板详情');
+    imageWrap.tabIndex = 0;
+    imageWrap.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTemplateDialog(template); } });
+    const body = document.createElement('div');
+    body.className = 'template-card-body';
+    const title = document.createElement('h2');
+    title.textContent = template.title;
+    const description = document.createElement('p');
+    description.textContent = template.description;
+    const actions = document.createElement('div');
+    actions.className = 'template-card-actions';
+    const details = document.createElement('button');
+    details.type = 'button';
+    details.textContent = '查看提示词';
+    details.addEventListener('click', () => openTemplateDialog(template));
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.className = 'template-use';
+    use.textContent = '使用模板';
+    use.addEventListener('click', () => useTemplate(template));
+    actions.append(details, use);
+    body.append(title, description, actions);
+    card.append(imageWrap, body);
+    return card;
+  }));
+}
+function openTemplateDialog(template) {
+  activeTemplate = template;
+  $('#templatePromptImage').src = template.image;
+  $('#templatePromptImage').alt = template.title + '风格参考图';
+  $('#templatePromptCategory').textContent = template.categoryLabel;
+  $('#templatePromptTitle').textContent = template.title;
+  $('#templatePromptDescription').textContent = template.description;
+  $('#templatePromptText').textContent = template.prompt;
+  $('#templatePromptDialog').showModal();
+}
+function useTemplate(template) {
+  $('#templatePromptDialog').open && $('#templatePromptDialog').close();
+  closeTemplatesPage();
+  promptInput.value = template.prompt;
+  updateCounter();
+  setStatus('已载入“' + template.title + '”提示词模板，可继续修改后生成。', 'success');
+  promptInput.focus();
+}
+$('#templatesButton').addEventListener('click', openTemplatesPage);
+$('#backToWorkspace').addEventListener('click', closeTemplatesPage);
+$('#templateSearch').addEventListener('input', renderTemplates);
+$('#closeTemplatePrompt').addEventListener('click', () => $('#templatePromptDialog').close());
+$('#templatePromptDialog').addEventListener('click', event => { if (event.target === $('#templatePromptDialog')) event.target.close(); });
+$('#useTemplateFromDialog').addEventListener('click', () => { if (activeTemplate) useTemplate(activeTemplate); });
 function applyTheme(dark) {
   document.body.classList.toggle('dark-theme', dark);
   $('#themeButton').setAttribute('aria-pressed', String(dark));
