@@ -187,7 +187,6 @@ function updateActionState() {
   const busy = generating || optimizing || loadingReferences;
   generateButton.disabled = busy;
   $('#optimizeButton').disabled = busy;
-  $('#templatesButton').disabled = busy;
   const capabilities = currentCapabilities();
   $('#addReference').disabled = busy || referenceImages.length >= capabilities.maxReferences;
   $('#undoOptimize').disabled = busy;
@@ -942,18 +941,33 @@ $('#previewDialog').addEventListener('click', event => {
 const templateCategories = [{ id: 'all', label: '全部风格' }, ...[...new Map(StyleTemplates.map(template => [template.category, template.categoryLabel])).entries()].map(([id, label]) => ({ id, label }))];
 let activeTemplateCategory = 'all';
 let activeTemplate = null;
-function openTemplatesPage() {
-  $('.workspace').hidden = true;
-  $('#templatesPage').hidden = false;
-  renderTemplateFilters();
-  renderTemplates();
+const routeTitles = {
+  create: '单图创作 · Prompt Studio',
+  series: '系列策划 · Prompt Studio',
+  styles: '风格库 · Prompt Studio',
+  gallery: '展馆 · Prompt Studio'
+};
+function currentRoute() {
+  const route = window.location.hash.slice(1);
+  return Object.hasOwn(routeTitles, route) ? route : 'create';
+}
+function renderRoute() {
+  const route = currentRoute();
+  document.querySelectorAll('[data-page]').forEach(page => { page.hidden = page.dataset.page !== route; });
+  document.querySelectorAll('.site-nav-link').forEach(link => {
+    if (link.dataset.route === route) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+  document.title = routeTitles[route];
+  if (route === 'styles') { renderTemplateFilters(); renderTemplates(); }
   window.scrollTo(0, 0);
 }
-function closeTemplatesPage() {
-  $('#templatesPage').hidden = true;
-  $('.workspace').hidden = false;
-  promptInput.focus();
+function navigateTo(route) {
+  if (!Object.hasOwn(routeTitles, route)) return;
+  if (currentRoute() === route) renderRoute();
+  else window.location.hash = route;
 }
+window.addEventListener('hashchange', renderRoute);
 function renderTemplateFilters() {
   const filters = $('#templateFilters');
   filters.replaceChildren(...templateCategories.map(category => {
@@ -1037,16 +1051,14 @@ function openTemplateDialog(template) {
 }
 function useTemplate(template) {
   $('#templatePromptDialog').open && $('#templatePromptDialog').close();
-  closeTemplatesPage();
   promptInput.value = template.prompt;
   promptBeforeOptimization = null;
   $('#undoOptimize').hidden = true;
   updateCounter();
   setStatus('已载入“' + template.title + '”提示词模板，可继续修改后生成。', 'success');
-  promptInput.focus();
+  navigateTo('create');
+  requestAnimationFrame(() => promptInput.focus());
 }
-$('#templatesButton').addEventListener('click', openTemplatesPage);
-$('#backToWorkspace').addEventListener('click', closeTemplatesPage);
 $('#templateSearch').addEventListener('input', renderTemplates);
 $('#closeTemplatePrompt').addEventListener('click', () => $('#templatePromptDialog').close());
 $('#templatePromptDialog').addEventListener('click', event => { if (event.target === $('#templatePromptDialog')) event.target.close(); });
@@ -1108,6 +1120,7 @@ for (const kind of ['image', 'optimizer']) {
 }
 updateActionState();
 applyTheme(safeStorage.get('prompt-studio-theme') === 'dark');
+renderRoute();
 renderHistory();
 fetch('/api/health').then(response => {
   if (!response.ok) throw new Error('服务未就绪');

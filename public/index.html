@@ -8,7 +8,25 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main class="workspace">
+  <header class="site-header">
+    <a class="site-brand" href="#create" aria-label="Prompt Studio 首页">
+      <span class="site-logo" aria-hidden="true">✦</span>
+      <span class="site-brand-copy"><strong>Prompt Studio</strong><span>AI 生图工作台</span></span>
+    </a>
+    <nav class="site-nav" aria-label="主导航">
+      <a class="site-nav-link" href="#create" data-route="create">单图创作</a>
+      <a class="site-nav-link" href="#series" data-route="series">系列策划</a>
+      <a class="site-nav-link" href="#styles" data-route="styles" id="templatesButton">风格库</a>
+      <a class="site-nav-link" href="#gallery" data-route="gallery">展馆</a>
+    </nav>
+    <div class="header-tools" aria-label="工作台工具">
+      <button class="tool-button" id="settingsButton" type="button" title="API 设置" aria-label="打开 API 设置" aria-haspopup="dialog" aria-controls="settingsDialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-.5 2.2-1.7 1L4.6 6 3 8.8l1.5 1.7v2L3 14.2 4.6 17l2.2-.2 1.7 1L9 20h3.2l.5-2.2 1.7-1 2.2.2 1.6-2.8-1.5-1.7v-2l1.5-1.7L16.6 6l-2.2.2-1.7-1L12.2 3Z" transform="translate(1.4 .5)"/><circle cx="12" cy="12" r="3"/></svg><span>设置</span>
+      </button>
+      <button class="tool-button" id="themeButton" type="button" title="切换主题" aria-label="切换深色主题" aria-pressed="false"><span class="theme-symbol" aria-hidden="true">◐</span><span>主题</span></button>
+    </div>
+  </header>
+  <main class="workspace" id="createPage" data-page="create">
     <div class="gallery-row">
       <section class="gallery-panel" aria-labelledby="galleryTitle">
         <header class="gallery-heading">
@@ -26,17 +44,6 @@
           </section>
         </div>
       </section>
-      <nav class="workspace-tools" aria-label="工作台工具">
-        <button class="tool-button" id="settingsButton" type="button" title="API 设置" aria-label="打开 API 设置" aria-haspopup="dialog" aria-controls="settingsDialog">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-.5 2.2-1.7 1L4.6 6 3 8.8l1.5 1.7v2L3 14.2 4.6 17l2.2-.2 1.7 1L9 20h3.2l.5-2.2 1.7-1 2.2.2 1.6-2.8-1.5-1.7v-2l1.5-1.7L16.6 6l-2.2.2-1.7-1L12.2 3Z" transform="translate(1.4 .5)"/><circle cx="12" cy="12" r="3"/></svg>
-          <span>设置</span>
-        </button>
-        <button class="tool-button" id="themeButton" type="button" title="切换主题" aria-label="切换深色主题" aria-pressed="false"><span class="theme-symbol" aria-hidden="true">◐</span><span>主题</span></button>
-        <button class="tool-button" id="templatesButton" type="button" title="浏览风格模板" aria-label="打开风格模板">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-          <span>模板</span>
-        </button>
-      </nav>
     </div>
 
     <section class="composer-panel" aria-label="提示词输入区">
@@ -62,11 +69,14 @@
     </section>
   </main>
 
-  <section id="templatesPage" class="templates-page" hidden aria-labelledby="templatesTitle">
+  <section id="seriesPage" class="route-placeholder" data-page="series" hidden aria-labelledby="seriesTitle">
+    <div class="route-placeholder-card"><span class="section-label">SERIES PLANNING</span><h1 id="seriesTitle">系列策划</h1><p>系列策划页面正在准备中。</p></div>
+  </section>
+
+  <section id="templatesPage" class="templates-page" data-page="styles" hidden aria-labelledby="templatesTitle">
     <div class="templates-shell">
       <header class="templates-header">
         <div class="templates-heading">
-          <button class="back-button" id="backToWorkspace" type="button" aria-label="返回生成工作台" title="返回生成工作台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m15 18-6-6 6-6"/><path d="M9 12h11"/></svg></button>
           <div><span class="section-label">PROMPT LIBRARY</span><h1 id="templatesTitle">风格模板</h1><p>从视觉方向出发，找到适合你的提示词参考。</p></div>
         </div>
         <div class="templates-count" id="templatesCount" aria-live="polite"></div>
@@ -75,6 +85,10 @@
       <div class="template-grid" id="templateGrid"></div>
       <div class="template-empty" id="templateEmpty" hidden><div class="template-empty-icon" aria-hidden="true">⌕</div><h2>没有找到匹配模板</h2><p>换一个关键词，或切换到全部风格继续浏览。</p></div>
     </div>
+  </section>
+
+  <section id="galleryPage" class="route-placeholder" data-page="gallery" hidden aria-labelledby="galleryPageTitle">
+    <div class="route-placeholder-card"><span class="section-label">GALLERY</span><h1 id="galleryPageTitle">展馆</h1><p>展馆页面正在准备中。生成记录可先在单图创作页面查看。</p><a class="button primary" href="#create">前往单图创作</a></div>
   </section>
 
   <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle">
