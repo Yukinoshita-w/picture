@@ -3,40 +3,55 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="OpenAI 兼容的 AI 生图工作台">
-  <title>Prompt Studio · AI 生图工作台</title>
+  <meta name="description" content="现代化AI图片生成工作台 - 专业、简洁、高效">
+  <title>Prompt Studio | AI Image Generator</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles-responsive.css">
   <link rel="stylesheet" href="/gallery.css">
 </head>
 <body>
   <header class="site-header">
-    <a class="site-brand" href="#create" aria-label="Prompt Studio 首页">
-      <span class="site-logo" aria-hidden="true">✦</span>
-      <span class="site-brand-copy"><strong>Prompt Studio</strong><span>AI 生图工作台</span></span>
+    <a class="site-brand" href="#create" aria-label="Prompt Studio">
+      <span class="site-logo" aria-hidden="true">◆</span>
+      <span class="site-brand-copy"><strong>Prompt Studio</strong></span>
     </a>
     <nav class="site-nav" aria-label="主导航">
-      <a class="site-nav-link" href="#create" data-route="create">图片创作</a>
-      <a class="site-nav-link" href="#series" data-route="series">系列创作</a>
-      <a class="site-nav-link" href="#styles" data-route="styles" id="templatesButton">风格模板</a>
-      <a class="site-nav-link" href="#gallery" data-route="gallery">作品画廊</a>
+      <a class="site-nav-link" href="#create" data-route="create">创作</a>
+      <a class="site-nav-link" href="#series" data-route="series">系列</a>
+      <a class="site-nav-link" href="#styles" data-route="styles" id="templatesButton">模板</a>
+      <a class="site-nav-link" href="#gallery" data-route="gallery">画廊</a>
     </nav>
-    <div class="header-tools" aria-label="工作台工具">
-      <button class="tool-button" id="settingsButton" type="button" title="API 设置" aria-label="打开 API 设置" aria-haspopup="dialog" aria-controls="settingsDialog">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-.5 2.2-1.7 1L4.6 6 3 8.8l1.5 1.7v2L3 14.2 4.6 17l2.2-.2 1.7 1L9 20h3.2l.5-2.2 1.7-1 2.2.2 1.6-2.8-1.5-1.7v-2l1.5-1.7L16.6 6l-2.2.2-1.7-1L12.2 3Z" transform="translate(1.4 .5)"/><circle cx="12" cy="12" r="3"/></svg><span>设置</span>
+    <div class="header-tools" aria-label="工具栏">
+      <button class="tool-button" id="settingsButton" type="button" title="设置" aria-label="打开设置" aria-haspopup="dialog" aria-controls="settingsDialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6M1 12h6m6 0h6"/></svg>
+        <span>设置</span>
       </button>
-      <button class="tool-button" id="themeButton" type="button" title="切换主题" aria-label="切换深色主题" aria-pressed="false"><span class="theme-symbol" aria-hidden="true">◐</span><span>主题</span></button>
+      <button class="tool-button" id="themeButton" type="button" title="切换主题" aria-label="切换主题" aria-pressed="false">
+        <span class="theme-symbol" aria-hidden="true">◐</span>
+      </button>
     </div>
   </header>
   <main class="workspace" id="createPage" data-page="create">
     <div class="gallery-row">
       <section class="gallery-panel" aria-labelledby="galleryTitle">
         <header class="gallery-heading">
-          <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><div><h1 id="galleryTitle">Prompt Studio</h1><p>图片与生成历史</p></div></div>
-          <span class="connection-pill"><span class="pulse-dot"></span><span id="connectionText">本地工作台</span></span>
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">◆</span>
+            <div>
+              <h1 id="galleryTitle">Prompt Studio</h1>
+              <p>AI Image Generator</p>
+            </div>
+          </div>
+          <span class="connection-pill"><span class="pulse-dot"></span><span id="connectionText">在线</span></span>
         </header>
         <div class="gallery-scroll" id="galleryScroll">
           <section class="result-area" id="resultArea" aria-live="polite">
-            <div class="empty-state"><div class="empty-icon" aria-hidden="true">✧</div><h2>让想象，出现在这里</h2><p>点击右上角设置连接 API，然后在下方描述你想要的画面。</p><span class="empty-caption">你的下一张作品，从一句话开始</span></div>
+            <div class="empty-state">
+              <div class="empty-icon" aria-hidden="true">◆</div>
+              <h2>开始你的创作</h2>
+              <p>在下方输入提示词，描述你想要生成的图片。支持文生图、图生图等多种模式。</p>
+              <span class="empty-caption">专业、简洁、高效</span>
+            </div>
           </section>
           <section class="history-section" id="historySection" hidden>
             <div class="history-heading">
@@ -52,19 +67,72 @@
 
     <section class="composer-panel" aria-label="提示词输入区">
       <form id="generateForm">
-        <div class="composer-heading"><div class="composer-title"><label for="prompt">描述你的画面</label><span class="generation-mode" id="generationMode">文生图</span><button class="text-button undo-prompt" id="undoOptimize" type="button" hidden>撤销优化</button></div><span class="counter" id="promptCounter">0 / 10000</span></div>
-        <div class="reference-list" id="referenceList" aria-label="已添加的参考图片" hidden></div>
-        <textarea id="prompt" name="prompt" maxlength="10000" placeholder="输入提示词，例如：一只戴着宇航员头盔的橘猫，在月球表面看日出，电影感灯光……" required></textarea>
+        <div class="composer-heading">
+          <div class="composer-title">
+            <label for="prompt">提示词</label>
+            <span class="generation-mode" id="generationMode">文生图</span>
+            <button class="undo-prompt" id="undoOptimize" type="button" hidden>撤销</button>
+          </div>
+          <span class="counter" id="promptCounter">0 / 10000</span>
+        </div>
+        <div class="reference-list" id="referenceList" aria-label="参考图片" hidden></div>
+        <textarea id="prompt" name="prompt" maxlength="10000" placeholder="描述你想要生成的图片，比如：一只橘猫坐在窗边看雨..." required></textarea>
         <div class="composer-toolbar">
           <div class="controls-row">
-            <button class="attach-button" id="addReference" type="button" aria-label="添加参考图片" title="添加、拖入或粘贴参考图片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg><span>参考图</span></button>
+            <button class="attach-button" id="addReference" type="button" aria-label="添加参考图" title="添加参考图片">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <path d="m3 16 6-6 4 4 8-8"/>
+              </svg>
+              <span>参考图</span>
+            </button>
             <input id="referenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
-            <div class="control size-control"><span class="control-label">尺寸</span><button id="sizeButton" class="size-trigger" type="button" aria-haspopup="dialog" aria-controls="sizeDialog"><span id="sizeButtonLabel">由接口决定</span><span aria-hidden="true">⌄</span></button><select id="size" name="size" hidden aria-label="图片尺寸"><option value="default">由接口决定</option></select></div>
-            <div class="control"><label for="quality">画质</label><select id="quality" name="quality"><option value="default">由接口决定</option></select></div>
-            <div class="control"><label for="count">数量</label><select id="count" name="n"><option value="1">1 张</option><option value="2">2 张</option><option value="3">3 张</option><option value="4">4 张</option></select></div>
-            <div class="control strength-control"><label for="optimizationStrength">优化强度</label><select id="optimizationStrength" aria-label="提示词优化强度" title="只影响手动提示词优化"><option value="light">轻度润色</option><option value="standard" selected>标准优化</option><option value="rich">丰富细节</option></select></div>
+            <div class="control size-control">
+              <label for="sizeButton">尺寸</label>
+              <button id="sizeButton" class="size-trigger" type="button" aria-haspopup="dialog" aria-controls="sizeDialog">
+                <span id="sizeButtonLabel">默认</span>
+                <span aria-hidden="true">⌄</span>
+              </button>
+              <select id="size" name="size" hidden aria-label="图片尺寸">
+                <option value="default">默认</option>
+              </select>
+            </div>
+            <div class="control">
+              <label for="quality">画质</label>
+              <select id="quality" name="quality">
+                <option value="default">默认</option>
+              </select>
+            </div>
+            <div class="control">
+              <label for="count">数量</label>
+              <select id="count" name="n">
+                <option value="1">1 张</option>
+                <option value="2">2 张</option>
+                <option value="3">3 张</option>
+                <option value="4">4 张</option>
+              </select>
+            </div>
+            <div class="control strength-control">
+              <label for="optimizationStrength">优化强度</label>
+              <select id="optimizationStrength" aria-label="提示词优化强度" title="只影响手动提示词优化">
+                <option value="light">轻度润色</option>
+                <option value="standard" selected>标准优化</option>
+                <option value="rich">丰富细节</option>
+              </select>
+            </div>
           </div>
-          <div class="generate-actions"><span class="shortcut-hint">Ctrl / ⌘ + Enter</span><button class="optimize-button" id="optimizeButton" type="button"><span aria-hidden="true">✧</span><span id="optimizeLabel">优化提示词</span></button><button class="cancel-button" id="cancelButton" type="button" hidden>取消</button><button class="generate-button" id="generateButton" type="submit"><span aria-hidden="true">✦</span><span id="generateLabel">生成图片</span><span aria-hidden="true">↗</span></button></div>
+          <div class="generate-actions">
+            <span class="shortcut-hint">Ctrl / ⌘ + Enter</span>
+            <button class="optimize-button" id="optimizeButton" type="button">
+              <span id="optimizeLabel">优化</span>
+            </button>
+            <button class="cancel-button" id="cancelButton" type="button" hidden>取消</button>
+            <button class="generate-button" id="generateButton" type="submit">
+              <span id="generateLabel">生成</span>
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
         </div>
       </form>
       <div class="task-progress" id="taskProgress" hidden><span id="taskElapsed"></span><span>取消后服务商仍可能继续处理或计费。</span></div>
@@ -75,7 +143,7 @@
   </main>
 
   <section id="seriesPage" class="route-placeholder" data-page="series" hidden aria-labelledby="seriesTitle">
-    <div class="route-placeholder-card"><span class="section-label">SERIES CREATION</span><h1 id="seriesTitle">系列创作</h1><p>系列创作页面正在准备中。</p></div>
+    <div class="route-placeholder-card"><span class="section-label">SERIES CREATION / 02</span><h1 id="seriesTitle">系列创作</h1><p>把一个主题展开成连续的画面、角色与节奏。系列创作空间正在准备中。</p></div>
   </section>
 
   <section id="templatesPage" class="templates-page" data-page="styles" hidden aria-labelledby="templatesTitle">
@@ -111,8 +179,6 @@
             <div class="cinema-floor" aria-hidden="true"></div>
           </div>
           <div class="cinema-caption"><div><span id="cinemaDate" class="section-label"></span><h2 id="cinemaTitle"></h2><p id="cinemaPrompt"></p></div><span id="cinemaCounter" class="cinema-counter" aria-live="polite"></span></div>
-          <div class="cinema-controls"><div><button type="button" id="cinemaPrevious" aria-label="上一幅作品">←</button><button type="button" id="cinemaPlay">播放</button><button type="button" id="cinemaNext" aria-label="下一幅作品">→</button></div><label>每幅停留<select id="cinemaDuration"><option value="5000">5 秒</option><option value="8000" selected>8 秒</option><option value="12000">12 秒</option></select></label><button type="button" id="cinemaFullscreen">全屏欣赏 ↗</button></div>
-          <div class="cinema-progress" aria-hidden="true"><span id="cinemaProgress"></span></div><div id="cinemaFilmstrip" class="cinema-filmstrip" aria-label="选择放映作品"></div>
         </div>
       </section>
       <footer class="gallery-footer"><span>PROMPT STUDIO / PERSONAL GALLERY</span><span>作品独立保存在当前浏览器，清除浏览器数据会移除收藏。</span></footer>

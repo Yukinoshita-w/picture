@@ -1,0 +1,104 @@
+/* Responsive and Additional Styles */
+
+@media (max-width: 768px) {
+  :root {
+    --header-height: 104px;
+    --spacing-xl: 20px;
+    --spacing-2xl: 32px;
+  }
+
+  .site-header {
+    padding: 0 var(--spacing-md);
+    height: var(--header-height);
+    flex-wrap: wrap;
+    align-content: center;
+    row-gap: 6px;
+  }
+
+  .site-nav {
+    position: static;
+    transform: none;
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    overflow-x: auto;
+    padding-top: 0;
+  }
+
+  .site-nav-link {
+    flex: 0 0 auto;
+  }
+
+  .header-tools .tool-button span:not(.theme-symbol) {
+    display: none;
+  }
+
+  .header-tools .tool-button {
+    width: 36px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .workspace {
+    padding-bottom: 380px;
+  }
+
+  .gallery-row {
+    padding: var(--spacing-lg) var(--spacing-md);
+  }
+
+  .brand h1 {
+    font-size: 24px;
+  }
+
+  .composer-panel form {
+    padding: var(--spacing-md);
+  }
+
+  .composer-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-md);
+  }
+
+  .controls-row {
+    width: 100%;
+    order: 2;
+  }
+
+  .control label,
+  .control-label {
+    display: none;
+  }
+
+  .generate-actions {
+    order: 1;
+    width: 100%;
+  }
+
+  .shortcut-hint {
+    display: none;
+  }
+
+  .optimize-button,
+  .generate-button {
+    flex: 1;
+  }
+
+  .result-grid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-lg);
+  }
+
+  .history-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-md);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

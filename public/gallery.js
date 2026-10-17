@@ -213,23 +213,15 @@
     }
     function pause() {
       playing = false; clearTimeout(timer);
-      $('#cinemaPlay').textContent = '播放'; $('#cinemaPlay').setAttribute('aria-pressed', 'false');
-      $('#cinemaProgress').classList.remove('is-running');
     }
     function schedule() {
       clearTimeout(timer);
-      const progress = $('#cinemaProgress'); progress.classList.remove('is-running');
       if (!playing || !visible || view !== 'cinema' || document.hidden || selected().length < 2) return;
-      const duration = Number($('#cinemaDuration').value);
-      progress.style.setProperty('--slide-duration', duration + 'ms');
-      void progress.offsetWidth;
-      progress.classList.add('is-running');
-      timer = setTimeout(() => step(1), duration);
+      timer = setTimeout(() => step(1), 8000);
     }
     function play() {
       if (selected().length < 2) return;
-      playing = true;
-      $('#cinemaPlay').textContent = '暂停'; $('#cinemaPlay').setAttribute('aria-pressed', 'true'); schedule();
+      playing = true; schedule();
     }
     function step(direction) {
       const slides = selected(); if (!slides.length) return;
@@ -258,21 +250,8 @@
       $('#cinemaDate').textContent = date(item.created) + ' / PRIVATE COLLECTION';
       $('#cinemaFrameNumber').textContent = 'PLATE ' + String(index + 1).padStart(3, '0');
       $('#cinemaCounter').textContent = String(index + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
-      for (const id of ['cinemaPrevious', 'cinemaNext', 'cinemaPreviousFrame', 'cinemaNextFrame', 'cinemaPlay']) $('#' + id).disabled = slides.length < 2;
+      for (const id of ['cinemaPreviousFrame', 'cinemaNextFrame']) $('#' + id).disabled = slides.length < 2;
       if (slides.length < 2) pause();
-      const filmstrip = $('#cinemaFilmstrip');
-      const focusedId = filmstrip.contains(document.activeElement) ? document.activeElement.dataset.artworkId : null;
-      filmstrip.replaceChildren(...slides.map((art, position) => {
-        const button = makeButton('', () => { currentId = art.id; drawSlide(); }, 'cinema-thumbnail');
-        button.dataset.artworkId = art.id;
-        button.setAttribute('aria-label', '查看第 ' + (position + 1) + ' 幅：' + title(art));
-        button.setAttribute('aria-pressed', String(art.id === currentId));
-        const number = document.createElement('span'); number.textContent = String(position + 1).padStart(2, '0');
-        button.append(artworkImage(art), number); return button;
-      }));
-      if (focusedId) [...filmstrip.children].find(button => button.dataset.artworkId === focusedId)?.focus({ preventScroll: true });
-      const active = $('#cinemaFilmstrip [aria-pressed=true]');
-      if (visible && view === 'cinema' && active) $('#cinemaFilmstrip').scrollLeft = active.offsetLeft - $('#cinemaFilmstrip').offsetLeft - $('#cinemaFilmstrip').clientWidth / 2 + active.clientWidth / 2;
       schedule();
     }
     document.querySelectorAll('[data-gallery-view]').forEach(button => button.addEventListener('click', () => setView(button.dataset.galleryView)));
@@ -281,10 +260,8 @@
     $('#gallerySort').addEventListener('change', () => { pause(); render(); });
     $('#gallerySelectAll').addEventListener('click', () => changeSelection(new Map(items.map(item => [item.id, true]))));
     $('#gallerySelectNone').addEventListener('click', () => changeSelection(new Map(items.map(item => [item.id, false]))));
-    for (const id of ['cinemaPrevious', 'cinemaPreviousFrame']) $('#' + id).addEventListener('click', () => step(-1));
-    for (const id of ['cinemaNext', 'cinemaNextFrame']) $('#' + id).addEventListener('click', () => step(1));
-    $('#cinemaPlay').addEventListener('click', () => playing ? pause() : play());
-    $('#cinemaDuration').addEventListener('change', schedule);
+    $('#cinemaPreviousFrame').addEventListener('click', () => step(-1));
+    $('#cinemaNextFrame').addEventListener('click', () => step(1));
     $('#cinemaStage').addEventListener('keydown', event => {
       if (event.target !== event.currentTarget) return;
       if (['ArrowLeft', 'ArrowRight', ' '].includes(event.key)) {
@@ -294,12 +271,6 @@
       }
     });
     document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
-    $('#cinemaFullscreen').hidden = !document.fullscreenEnabled;
-    $('#cinemaFullscreen').addEventListener('click', async () => {
-      try { if (document.fullscreenElement) await document.exitFullscreen(); else await $('#galleryCinema').requestFullscreen(); }
-      catch { status('浏览器暂时无法进入全屏，可继续在页面内欣赏。', true); }
-    });
-    document.addEventListener('fullscreenchange', () => { $('#cinemaFullscreen').textContent = document.fullscreenElement ? '退出全屏 ↙' : '全屏欣赏 ↗'; });
     $('#removeGalleryDialog').addEventListener('close', async event => {
       const id = removalId; removalId = null;
       if (event.target.returnValue !== 'remove' || id === null) return;
