@@ -14,7 +14,24 @@
     let selectionBusy = false;
     const submitting = new Set();
     const date = value => new Date(value).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
-    const title = item => String(item.prompt || '无题作品').replace(/\s+/g, ' ').slice(0, 28);
+    // Cut at a natural boundary so a headline never ends mid-word ("Bongo Ca").
+    function clip(text, limit) {
+      if (text.length <= limit) return text;
+      const window = text.slice(0, limit);
+      const boundary = Math.max(
+        window.lastIndexOf('，'), window.lastIndexOf('。'), window.lastIndexOf('、'),
+        window.lastIndexOf('；'), window.lastIndexOf('：'), window.lastIndexOf(' '),
+        window.lastIndexOf('（'), window.lastIndexOf(',')
+      );
+      if (boundary >= limit * 0.45) return window.slice(0, boundary);
+      return window.replace(/[\s，。、；：,]+$/, '') + '…';
+    }
+    const headline = item => {
+      const text = String(item.prompt || '无题作品').replace(/\s+/g, ' ').trim();
+      const sentence = text.split(/[。！？]/)[0] || text;
+      return clip(sentence, 64);
+    };
+    const title = item => clip(String(item.prompt || '无题作品').replace(/\s+/g, ' ').trim(), 28);
     function status(message, error = false) {
       $('#galleryStatus').textContent = message;
       $('#galleryStatus').hidden = !message;
@@ -245,9 +262,17 @@
       }
       $('#cinemaPreviousImage').src = slides[(index - 1 + slides.length) % slides.length].src;
       $('#cinemaNextImage').src = slides[(index + 1) % slides.length].src;
-      $('#cinemaTitle').textContent = title(item);
+      $('#cinemaTitle').textContent = headline(item);
       $('#cinemaPrompt').textContent = item.prompt;
       $('#cinemaDate').textContent = date(item.created) + ' / PRIVATE COLLECTION';
+      const plate = $('#cinemaPlate');
+      if (plate) plate.textContent = 'PLATE ' + String(index + 1).padStart(3, '0');
+      const chars = $('#cinemaChars');
+      if (chars) chars.textContent = String((item.prompt || '').length) + ' 字';
+      const reuseButton = $('#cinemaReuse');
+      if (reuseButton) reuseButton.onclick = () => reuse(item.prompt);
+      const downloadButton = $('#cinemaDownload');
+      if (downloadButton) downloadButton.onclick = event => download(item.src, event.currentTarget);
       $('#cinemaFrameNumber').textContent = 'PLATE ' + String(index + 1).padStart(3, '0');
       $('#cinemaCounter').textContent = String(index + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
       for (const id of ['cinemaPreviousFrame', 'cinemaNextFrame']) $('#' + id).disabled = slides.length < 2;

@@ -3,174 +3,260 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="现代化AI图片生成工作台 - 专业、简洁、高效">
-  <title>Prompt Studio | AI Image Generator</title>
+  <meta name="description" content="Prompt Studio · 一个把 AI 图像创作当作编辑工作的画室">
+  <title>Prompt Studio | AI Image Atelier</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/styles-responsive.css">
   <link rel="stylesheet" href="/gallery.css">
 </head>
 <body>
   <header class="site-header">
-    <a class="site-brand" href="#create" aria-label="Prompt Studio">
-      <span class="site-logo" aria-hidden="true">◆</span>
-      <span class="site-brand-copy"><strong>Prompt Studio</strong></span>
+    <a class="site-brand" href="#create" aria-label="Prompt Studio 首页">
+      <span class="site-logo" aria-hidden="true"></span>
+      <strong>Prompt Studio</strong>
+      <span class="site-brand-sub">Image Atelier</span>
     </a>
     <nav class="site-nav" aria-label="主导航">
-      <a class="site-nav-link" href="#create" data-route="create">创作</a>
-      <a class="site-nav-link" href="#series" data-route="series">系列</a>
-      <a class="site-nav-link" href="#styles" data-route="styles" id="templatesButton">模板</a>
-      <a class="site-nav-link" href="#gallery" data-route="gallery">画廊</a>
+      <a class="site-nav-link" href="#create" data-route="create"><i aria-hidden="true">01</i>创作</a>
+      <a class="site-nav-link" href="#series" data-route="series"><i aria-hidden="true">02</i>系列</a>
+      <a class="site-nav-link" href="#styles" data-route="styles" id="templatesButton"><i aria-hidden="true">03</i>模板</a>
+      <a class="site-nav-link" href="#gallery" data-route="gallery"><i aria-hidden="true">04</i>画廊</a>
     </nav>
-    <div class="header-tools" aria-label="工具栏">
-      <button class="tool-button" id="settingsButton" type="button" title="设置" aria-label="打开设置" aria-haspopup="dialog" aria-controls="settingsDialog">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6M1 12h6m6 0h6"/></svg>
+    <div class="header-tools">
+      <button class="tool-button" id="settingsButton" type="button" aria-label="打开设置" aria-haspopup="dialog" aria-controls="settingsDialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.6v3.2M12 18.2v3.2M2.6 12h3.2M18.2 12h3.2M5.4 5.4l2.2 2.2M16.4 16.4l2.2 2.2M18.6 5.4l-2.2 2.2M7.6 16.4l-2.2 2.2"/></svg>
         <span>设置</span>
       </button>
-      <button class="tool-button" id="themeButton" type="button" title="切换主题" aria-label="切换主题" aria-pressed="false">
-        <span class="theme-symbol" aria-hidden="true">◐</span>
+      <button class="tool-button theme-button" id="themeButton" type="button" aria-label="切换深色主题" aria-pressed="false">
+        <span class="theme-symbol" aria-hidden="true"></span>
       </button>
     </div>
   </header>
+
   <main class="workspace" id="createPage" data-page="create">
-    <div class="gallery-row">
-      <section class="gallery-panel" aria-labelledby="galleryTitle">
-        <header class="gallery-heading">
-          <div class="brand">
-            <span class="brand-mark" aria-hidden="true">◆</span>
-            <div>
-              <h1 id="galleryTitle">Prompt Studio</h1>
-              <p>AI Image Generator</p>
-            </div>
-          </div>
-          <span class="connection-pill"><span class="pulse-dot"></span><span id="connectionText">在线</span></span>
-        </header>
-        <div class="gallery-scroll" id="galleryScroll">
-          <section class="result-area" id="resultArea" aria-live="polite">
-            <div class="empty-state">
-              <div class="empty-icon" aria-hidden="true">◆</div>
-              <h2>开始你的创作</h2>
-              <p>在下方输入提示词，描述你想要生成的图片。支持文生图、图生图等多种模式。</p>
-              <span class="empty-caption">专业、简洁、高效</span>
-            </div>
-          </section>
-          <section class="history-section" id="historySection" hidden>
-            <div class="history-heading">
-              <h2>最近生成</h2>
-            </div>
-            <p class="history-note">最多保存 8 张至本机浏览器，点击图片查看大图，可在每张图片右下角删除或下载。</p>
-            <div class="history-grid" id="historyGrid"></div>
-            <p class="history-status" id="historyStatus" role="status" aria-live="polite" hidden></p>
-          </section>
+    <div class="shell">
+      <aside class="rail" aria-label="本次会话">
+        <div class="rail-head">
+          <span class="section-label">本次会话</span>
+          <span class="rail-count" id="railCount">00</span>
         </div>
+        <section class="history-section" id="historySection" hidden aria-labelledby="historyTitle">
+          <h2 class="visually-hidden" id="historyTitle">最近生成</h2>
+          <div class="history-grid" id="historyGrid"></div>
+          <p class="history-status" id="historyStatus" role="status" aria-live="polite" hidden></p>
+        </section>
+        <p class="rail-empty" id="railEmpty">生成的作品会按顺序排在这里，点一下即可回到那一次的画面。</p>
+        <div class="rail-foot">
+          <span class="connection-pill"><span class="pulse-dot" aria-hidden="true"></span><span id="connectionText">连接中</span></span>
+          <p class="rail-note">作品最多保留 8 件于本机浏览器。清除浏览器数据会一并移除。</p>
+        </div>
+      </aside>
+
+      <section class="gallery-panel stage" aria-labelledby="stageTitle">
+        <header class="stage-head">
+          <div class="stage-heading">
+            <span class="section-label" id="stageEyebrow">Text → Image</span>
+            <h1 id="stageTitle">开始你的创作</h1>
+            <p class="stage-lede" id="stageLede">写下你想看见的画面，从主体、光线、材质到镜头，越具体越接近。</p>
+          </div>
+          <div class="stage-meta">
+            <span class="generation-mode" id="generationMode">文生图</span>
+            <span class="stage-clock" id="stageClock" aria-hidden="true">PLATE —</span>
+          </div>
+        </header>
+
+        <div class="gallery-scroll" id="galleryScroll">
+          <section class="result-area" id="resultArea" aria-live="polite" aria-label="生成结果">
+            <div class="empty-state">
+              <div class="empty-plate" aria-hidden="true">
+                <span></span><span></span><span></span>
+              </div>
+              <h2>第一幅画面，从一句话开始</h2>
+              <p>例如：清晨的山谷被薄雾分成三层，前景有安静的湖面和细小野花，柔和的粉蓝色调，电影宽幅构图。</p>
+              <div class="empty-starters" id="emptyStarters">
+                <button type="button" data-starter="一只橘猫坐在窗边看雨，玻璃上有水痕，暖色灯光从背后透出，浅景深，电影感构图">橘猫 · 雨窗</button>
+                <button type="button" data-starter="当代粗野主义建筑摄影，裸露混凝土与重复结构，正午硬光制造清晰阴影，低机位广角">混凝土 · 正午</button>
+                <button type="button" data-starter="透明水彩插画风格的静谧花园，纸张纤维清晰可见，水彩晕染与自然留白，柔和春日配色">水彩 · 花园</button>
+              </div>
+            </div>
+          </section>
+
+          <dl class="plate-meta" id="plateMeta" hidden>
+            <div><dt>Model</dt><dd id="metaModel">—</dd></div>
+            <div><dt>Size</dt><dd id="metaSize">—</dd></div>
+            <div><dt>Quality</dt><dd id="metaQuality">—</dd></div>
+            <div><dt>Elapsed</dt><dd id="metaElapsed">—</dd></div>
+            <div><dt>Count</dt><dd id="metaCount">—</dd></div>
+          </dl>
+
+          <div class="stage-prompt" id="stagePrompt" hidden>
+            <span class="section-label">当前提示词</span>
+            <p id="stagePromptText"></p>
+          </div>
+        </div>
+
+        <p class="workspace-status" id="workspaceStatus" role="status" aria-live="polite">先填写 API 设置，再开始生成。密钥只保留在当前标签页。</p>
+        <details id="generationRequirementsPreview" class="generation-requirements" hidden><summary>将随提示词发送的生成要求</summary><p id="generationRequirementsText"></p></details>
       </section>
     </div>
 
     <section class="composer-panel" aria-label="提示词输入区">
       <form id="generateForm">
-        <div class="composer-heading">
-          <div class="composer-title">
-            <label for="prompt">提示词</label>
-            <span class="generation-mode" id="generationMode">文生图</span>
-            <button class="undo-prompt" id="undoOptimize" type="button" hidden>撤销</button>
-          </div>
-          <span class="counter" id="promptCounter">0 / 10000</span>
-        </div>
-        <div class="reference-list" id="referenceList" aria-label="参考图片" hidden></div>
-        <textarea id="prompt" name="prompt" maxlength="10000" placeholder="描述你想要生成的图片，比如：一只橘猫坐在窗边看雨..." required></textarea>
-        <div class="composer-toolbar">
-          <div class="controls-row">
+        <div class="composer-bar">
+          <div class="composer-main">
             <button class="attach-button" id="addReference" type="button" aria-label="添加参考图" title="添加参考图片">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                <circle cx="8.5" cy="8.5" r="1.5"/>
-                <path d="m3 16 6-6 4 4 8-8"/>
-              </svg>
-              <span>参考图</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             </button>
             <input id="referenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
-            <div class="control size-control">
-              <label for="sizeButton">尺寸</label>
-              <button id="sizeButton" class="size-trigger" type="button" aria-haspopup="dialog" aria-controls="sizeDialog">
-                <span id="sizeButtonLabel">默认</span>
-                <span aria-hidden="true">⌄</span>
+            <div class="composer-field">
+              <label class="visually-hidden" for="prompt">提示词</label>
+              <textarea id="prompt" name="prompt" maxlength="10000" rows="2" placeholder="描述你想要的画面：主体、光线、材质、镜头…" required></textarea>
+              <div class="reference-list" id="referenceList" aria-label="参考图片" hidden></div>
+            </div>
+          </div>
+          <div class="composer-foot">
+            <div class="controls-row">
+              <div class="control size-control">
+                <label for="sizeButton">尺寸</label>
+                <button id="sizeButton" class="size-trigger" type="button" aria-haspopup="dialog" aria-controls="sizeDialog">
+                  <span id="sizeButtonLabel">默认</span>
+                </button>
+                <select id="size" name="size" hidden aria-label="图片尺寸"><option value="default">默认</option></select>
+              </div>
+              <div class="control">
+                <label for="quality">画质</label>
+                <select id="quality" name="quality"><option value="default">默认</option></select>
+              </div>
+              <div class="control">
+                <label for="count">数量</label>
+                <select id="count" name="n"><option value="1">1 张</option><option value="2">2 张</option><option value="3">3 张</option><option value="4">4 张</option></select>
+              </div>
+              <div class="control strength-control">
+                <label for="optimizationStrength">程度</label>
+                <select id="optimizationStrength" aria-label="提示词优化强度" title="只影响手动提示词优化">
+                  <option value="light">轻度润色</option>
+                  <option value="standard" selected>标准优化</option>
+                  <option value="rich">丰富细节</option>
+                </select>
+              </div>
+            </div>
+            <div class="generate-actions">
+              <span class="counter" id="promptCounter">0 / 10000</span>
+              <button class="undo-prompt" id="undoOptimize" type="button" hidden>撤销</button>
+              <button class="optimize-button" id="optimizeButton" type="button"><span id="optimizeLabel">优化提示词</span></button>
+              <button class="cancel-button" id="cancelButton" type="button" hidden>取消</button>
+              <button class="generate-button" id="generateButton" type="submit">
+                <span id="generateLabel">生成图片</span>
+                <span class="generate-key" aria-hidden="true">⌘↵</span>
               </button>
-              <select id="size" name="size" hidden aria-label="图片尺寸">
-                <option value="default">默认</option>
-              </select>
-            </div>
-            <div class="control">
-              <label for="quality">画质</label>
-              <select id="quality" name="quality">
-                <option value="default">默认</option>
-              </select>
-            </div>
-            <div class="control">
-              <label for="count">数量</label>
-              <select id="count" name="n">
-                <option value="1">1 张</option>
-                <option value="2">2 张</option>
-                <option value="3">3 张</option>
-                <option value="4">4 张</option>
-              </select>
-            </div>
-            <div class="control strength-control">
-              <label for="optimizationStrength">优化强度</label>
-              <select id="optimizationStrength" aria-label="提示词优化强度" title="只影响手动提示词优化">
-                <option value="light">轻度润色</option>
-                <option value="standard" selected>标准优化</option>
-                <option value="rich">丰富细节</option>
-              </select>
             </div>
           </div>
-          <div class="generate-actions">
-            <span class="shortcut-hint">Ctrl / ⌘ + Enter</span>
-            <button class="optimize-button" id="optimizeButton" type="button">
-              <span id="optimizeLabel">优化</span>
-            </button>
-            <button class="cancel-button" id="cancelButton" type="button" hidden>取消</button>
-            <button class="generate-button" id="generateButton" type="submit">
-              <span id="generateLabel">生成</span>
-              <span aria-hidden="true">→</span>
-            </button>
-          </div>
+          <div class="task-progress" id="taskProgress" hidden><span id="taskElapsed"></span><span>取消后服务商仍可能继续处理或计费。</span></div>
+          <p class="reference-hint" id="referenceHint" hidden>支持 PNG / JPEG / WebP，最多 4 张，单张 10 MB、总计 20 MB。可指定每张图用途及需要保留或修改的内容。</p>
         </div>
       </form>
-      <div class="task-progress" id="taskProgress" hidden><span id="taskElapsed"></span><span>取消后服务商仍可能继续处理或计费。</span></div>
-      <p class="reference-hint" id="referenceHint" hidden>支持 PNG / JPEG / WebP，最多 4 张，单张 10 MB、总计 20 MB。可指定每张图用途及需要保留或修改的内容。</p>
-      <p class="workspace-status" id="workspaceStatus" role="status" aria-live="polite">先点击右上角设置，填写 API 信息即可开始生成。</p>
-      <details id="generationRequirementsPreview" class="generation-requirements" hidden><summary>将随提示词发送的生成要求</summary><p id="generationRequirementsText"></p></details>
     </section>
   </main>
 
-  <section id="seriesPage" class="route-placeholder" data-page="series" hidden aria-labelledby="seriesTitle">
-    <div class="route-placeholder-card"><span class="section-label">SERIES CREATION / 02</span><h1 id="seriesTitle">系列创作</h1><p>把一个主题展开成连续的画面、角色与节奏。系列创作空间正在准备中。</p></div>
+  <section id="seriesPage" class="series-page" data-page="series" hidden aria-labelledby="seriesTitle">
+    <div class="series-shell">
+      <header class="masthead">
+        <div>
+          <span class="section-label">Series Creation · 02</span>
+          <h1 id="seriesTitle">系列创作<em>。</em></h1>
+          <p class="lede">把一个主题展开成连续的画面、角色与节奏。系列工作台正在准备中——你仍可以从当前画面延展变体。</p>
+        </div>
+      </header>
+      <div class="series-grid">
+        <article class="series-card"><span class="section-label">A · 同一主体</span><h2>保留角色，换环境</h2><p>锁定人物与服装，只改变场景、光线与时间。适合连续叙事与角色设定。</p></article>
+        <article class="series-card"><span class="section-label">B · 同一光线</span><h2>保留氛围，换主体</h2><p>沿用同一套光比与色温，替换主体与构图，得到统一的视觉语言。</p></article>
+        <article class="series-card"><span class="section-label">C · 同一构图</span><h2>保留框架，换细节</h2><p>保持机位与画幅不变，替换材质、颜色与配饰，用于系列海报与封面。</p></article>
+      </div>
+      <a class="series-cta" href="#create">回到创作台 ↗</a>
+    </div>
   </section>
 
   <section id="templatesPage" class="templates-page" data-page="styles" hidden aria-labelledby="templatesTitle">
     <div class="templates-shell">
-      <header class="templates-header">
-        <div class="templates-heading">
-          <div><span class="section-label">PROMPT LIBRARY</span><h1 id="templatesTitle">风格模板</h1><p>从视觉方向出发，找到适合你的提示词参考。</p></div>
+      <header class="masthead">
+        <div>
+          <span class="section-label">Prompt Library · 03</span>
+          <h1 id="templatesTitle">风格模板<em>。</em></h1>
+          <p class="lede">从视觉方向出发，找到可以继续修改的提示词起点。</p>
         </div>
-        <div class="templates-count" id="templatesCount" aria-live="polite"></div>
+        <div class="masthead-count"><b id="templatesCount" aria-live="polite">12</b><span>个方向</span></div>
       </header>
-      <div class="templates-toolbar"><label class="template-search" for="templateSearch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input id="templateSearch" type="search" placeholder="搜索模板、风格或关键词" autocomplete="off"></label><div class="template-filters" id="templateFilters" role="tablist" aria-label="模板分类"></div></div>
+      <div class="templates-toolbar">
+        <label class="template-search" for="templateSearch">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg>
+          <input id="templateSearch" type="search" placeholder="搜索模板、风格或关键词" autocomplete="off">
+        </label>
+        <div class="template-filters" id="templateFilters" role="tablist" aria-label="模板分类"></div>
+      </div>
       <div class="template-grid" id="templateGrid"></div>
-      <div class="template-empty" id="templateEmpty" hidden><div class="template-empty-icon" aria-hidden="true">⌕</div><h2>没有找到匹配模板</h2><p>换一个关键词，或切换到全部风格继续浏览。</p></div>
+      <div class="template-empty" id="templateEmpty" hidden>
+        <div class="template-empty-icon" aria-hidden="true">⌕</div>
+        <h2>没有找到匹配模板</h2>
+        <p>换一个关键词，或切换到全部风格继续浏览。</p>
+      </div>
     </div>
   </section>
 
   <section id="galleryPage" class="art-gallery" data-page="gallery" hidden aria-labelledby="galleryPageTitle">
     <div class="art-gallery-shell">
-      <header class="art-gallery-heading"><div><span class="section-label">THE PERSONAL COLLECTION</span><h1 id="galleryPageTitle">作品画廊<span class="gallery-title-dot">.</span></h1><p>让灵感有迹可循，让作品慢慢被看见。</p></div><div class="gallery-edition"><span>PRIVATE COLLECTION</span><strong id="galleryTotal">00</strong><span>件作品 · 本机收藏</span></div></header>
-      <div class="gallery-navigation"><div class="gallery-view-switch" role="group" aria-label="画廊展示方式"><button type="button" data-gallery-view="corridor" aria-pressed="true">作品走廊</button><button type="button" data-gallery-view="cinema" aria-pressed="false">沉浸放映</button></div><span class="gallery-selection-count" id="gallerySelectionCount">已选 0 件</span><button type="button" class="gallery-launch" id="galleryLaunch" disabled>放映所选 <span aria-hidden="true">↗</span></button></div>
+      <header class="masthead">
+        <div>
+          <span class="section-label">The Personal Collection · 04</span>
+          <h1 id="galleryPageTitle">作品画廊<em>。</em></h1>
+          <p class="lede">沿着时间重访每一次灵感。勾选作品，编排一场只属于自己的放映。</p>
+        </div>
+        <div class="masthead-count"><b id="galleryTotal">00</b><span>件作品 · 本机收藏</span></div>
+      </header>
+
+      <div class="gallery-navigation">
+        <div class="gallery-view-switch" role="group" aria-label="画廊展示方式">
+          <button type="button" data-gallery-view="corridor" aria-pressed="true">作品走廊</button>
+          <button type="button" data-gallery-view="cinema" aria-pressed="false">沉浸放映</button>
+        </div>
+        <span class="gallery-selection-count" id="gallerySelectionCount">已选 0 件</span>
+        <div class="gallery-nav-tools">
+          <button type="button" class="text-action" id="gallerySelectAll">全选</button>
+          <button type="button" class="text-action" id="gallerySelectNone">清空</button>
+          <button type="button" class="gallery-launch" id="galleryLaunch" disabled>放映所选 <span aria-hidden="true">↗</span></button>
+        </div>
+      </div>
+
       <p id="galleryStatus" class="gallery-status" role="status" aria-live="polite" hidden></p>
-      <div id="galleryEmpty" class="gallery-empty" hidden><div class="empty-exhibition" aria-hidden="true"><span></span><span>✦</span><span></span></div><span class="section-label">YOUR FIRST EXHIBITION</span><h2>第一幅作品，从这里入藏</h2><p>生成图片后，点击“提交画廊”。<br>将喜欢的作品留下，编排一场属于自己的放映。</p><a href="#create" class="gallery-launch">前往图片创作 ↗</a></div>
-      <section id="galleryCorridor" aria-label="按时间排列的作品走廊" hidden><div class="corridor-toolbar"><div><span class="section-label">A WALK THROUGH TIME</span><p>沿着时间，重访每一次灵感。</p></div><div class="corridor-tools"><button id="gallerySelectAll" type="button">全选放映</button><button id="gallerySelectNone" type="button">清空选择</button><label class="gallery-sort-label">时间排序<select id="gallerySort"><option value="newest">最新创作在前</option><option value="oldest">最早创作在前</option></select></label></div></div><div id="galleryTimeline"></div></section>
+
+      <div id="galleryEmpty" class="gallery-empty" hidden>
+        <div class="empty-exhibition" aria-hidden="true"><span></span><span>✦</span><span></span></div>
+        <span class="section-label">Your First Exhibition</span>
+        <h2>第一幅作品，从这里入藏</h2>
+        <p>生成图片后，点击“提交画廊”。<br>将喜欢的作品留下，编排一场属于自己的放映。</p>
+        <a href="#create" class="gallery-launch">前往图片创作 ↗</a>
+      </div>
+
+      <section id="galleryCorridor" aria-label="按时间排列的作品走廊" hidden>
+        <div class="corridor-toolbar">
+          <div>
+            <span class="section-label">A Walk Through Time</span>
+            <p>沿着时间，重访每一次灵感。</p>
+          </div>
+          <label class="gallery-sort-label">时间排序
+            <select id="gallerySort"><option value="newest">最新创作在前</option><option value="oldest">最早创作在前</option></select>
+          </label>
+        </div>
+        <div id="galleryTimeline"></div>
+      </section>
+
       <section id="galleryCinema" class="gallery-cinema" aria-label="沉浸式作品放映" hidden>
-        <div id="cinemaEmpty" class="cinema-empty" hidden><h2>为这场放映挑选作品</h2><p>在作品走廊勾选“加入放映”，再回到这里欣赏。</p><button type="button" id="cinemaChoose" class="gallery-launch">挑选作品 ↗</button></div>
+        <div id="cinemaEmpty" class="cinema-empty" hidden>
+          <h2>为这场放映挑选作品</h2>
+          <p>在作品走廊勾选“加入放映”，再回到这里欣赏。</p>
+          <button type="button" id="cinemaChoose" class="gallery-launch">挑选作品 ↗</button>
+        </div>
         <div id="cinemaContent" hidden>
-          <div class="cinema-topline"><span class="section-label">A MOMENT IN THE FRAME</span><span>留一点时间，只看画面。</span></div>
+          <div class="cinema-topline"><span class="section-label">A Moment In The Frame</span><span>留一点时间，只看画面。</span></div>
           <div id="cinemaStage" class="cinema-stage" tabindex="0" role="region" aria-label="作品放映，方向键切换，空格播放或暂停">
             <div class="cinema-light" aria-hidden="true"></div>
             <button id="cinemaPreviousFrame" class="cinema-side cinema-side-previous" type="button" aria-label="上一幅作品"><img alt="" id="cinemaPreviousImage"></button>
@@ -178,72 +264,122 @@
             <button id="cinemaNextFrame" class="cinema-side cinema-side-next" type="button" aria-label="下一幅作品"><img alt="" id="cinemaNextImage"></button>
             <div class="cinema-floor" aria-hidden="true"></div>
           </div>
-          <div class="cinema-caption"><div><span id="cinemaDate" class="section-label"></span><h2 id="cinemaTitle"></h2><p id="cinemaPrompt"></p></div><span id="cinemaCounter" class="cinema-counter" aria-live="polite"></span></div>
+          <div class="cinema-caption">
+            <div class="cinema-caption-main">
+              <div class="cinema-caption-head">
+                <span id="cinemaDate" class="section-label"></span>
+                <span id="cinemaCounter" class="cinema-counter" aria-live="polite"></span>
+              </div>
+              <h2 id="cinemaTitle"></h2>
+              <p id="cinemaPrompt"></p>
+            </div>
+            <aside class="cinema-aside" aria-label="作品信息与操作">
+              <dl class="cinema-meta">
+                <div><dt>Plate</dt><dd id="cinemaPlate">—</dd></div>
+                <div><dt>Chars</dt><dd id="cinemaChars">—</dd></div>
+              </dl>
+              <div class="cinema-actions">
+                <button type="button" id="cinemaReuse">复用提示词</button>
+                <button type="button" id="cinemaDownload">下载原图 ↗</button>
+              </div>
+            </aside>
+          </div>
         </div>
       </section>
-      <footer class="gallery-footer"><span>PROMPT STUDIO / PERSONAL GALLERY</span><span>作品独立保存在当前浏览器，清除浏览器数据会移除收藏。</span></footer>
+
+      <footer class="gallery-footer"><span>Prompt Studio / Personal Gallery</span><span>作品独立保存在当前浏览器，清除浏览器数据会移除收藏。</span></footer>
     </div>
   </section>
 
   <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle">
-    <header class="modal-heading"><div><span class="section-label">CONNECTION</span><h2 id="settingsTitle">API 设置</h2></div><button class="close-button" id="closeSettings" type="button" aria-label="关闭设置">×</button></header>
+    <header class="modal-heading">
+      <div><span class="section-label">Connection</span><h2 id="settingsTitle">API 设置</h2></div>
+      <button class="close-button" id="closeSettings" type="button" aria-label="关闭设置">×</button>
+    </header>
     <p class="panel-intro">分别配置图片生成和提示词优化服务。密钥只在当前标签页中使用，刷新页面会保留，关闭标签页后再打开需要重新填写。</p>
-    <div class="settings-tabs" role="tablist" aria-label="API 配置类型"><button id="imageSettingsTab" type="button" role="tab" aria-selected="true" aria-controls="settingsForm">图片生成 API</button><button id="optimizerSettingsTab" type="button" role="tab" aria-selected="false" aria-controls="optimizerSettingsForm" tabindex="-1">提示词优化 API</button></div>
-        <form id="settingsForm" autocomplete="off" role="tabpanel" aria-labelledby="imageSettingsTab">
-          <div class="preset-toolbar" aria-label="图片生成 API 预设"><label for="imagePreset">配置预设</label><select id="imagePreset"><option value="">不使用预设</option></select><input id="imagePresetName" type="text" maxlength="40" placeholder="预设名称"><button class="button secondary" id="saveImagePreset" type="button">保存</button><button class="button text-button" id="deleteImagePreset" type="button" disabled>删除</button></div>
-          <p class="field-hint preset-hint">预设保存 URL、模型、能力和默认参数，不保存 API Key。切换预设会清空当前 API Key。</p>
-          <label class="field-label" for="apiUrl">API URL <span class="required">*</span></label>
-          <div class="input-wrap"><span class="input-prefix">↗</span><input id="apiUrl" name="apiUrl" type="url" placeholder="https://api.openai.com/v1" required /></div>
-          <p class="field-hint">支持 Base URL（含 /v1）或完整图片接口地址。有参考图时会调用同一服务的图片编辑接口。</p>
-          <label class="field-label" for="apiKey">API KEY <span class="required">*</span></label>
-          <div class="input-wrap"><span class="input-prefix">⌘</span><input id="apiKey" name="apiKey" type="password" placeholder="sk-••••••••••••••••" required /><button type="button" class="reveal-key" id="revealKey" aria-label="显示 API Key">◉</button></div>
-          <label class="field-label" for="model">MODEL（模型名称）<span class="required">*</span></label>
-          <div class="input-wrap"><span class="input-prefix">✣</span><input id="model" name="model" type="text" placeholder="例如：gpt-image-1" required /></div>
-          <div class="quick-models"><span>快速填入</span><button type="button" data-model="gpt-image-1">gpt-image-1</button><button type="button" data-model="dall-e-3">dall-e-3</button></div>
-          <label class="field-label" for="capabilityMode">模型能力</label>
-          <div class="select-wrap"><select id="capabilityMode"><option value="auto">自动识别 · 按模型名称</option><option value="custom">自定义能力 · 按服务商文档</option></select></div>
-          <p class="field-hint">自动识别是常见模型的参数预设，不会探测服务商。第三方接口有差异时请选择自定义；未勾选的参数仅保留接口默认值，不会发送对应字段。</p>
-          <fieldset id="customCapabilities" class="capability-fields" hidden disabled>
-            <legend>允许的接口参数</legend>
-            <fieldset class="capability-options"><legend>尺寸 size（不勾选则不发送）</legend><div id="capabilitySizes" class="capability-choices"></div></fieldset>
-            <label class="custom-size-capability"><input id="capabilityCustomSizes" type="checkbox">支持自定义尺寸（按服务商文档开启）</label>
-            <p class="field-hint">开启后可选择更多比例、2K / 4K 或输入宽高。应用接受 64–8192 像素、8 的倍数，实际范围仍以接口为准。</p>
-            <fieldset class="capability-options"><legend>画质 quality（不勾选则不发送）</legend><div id="capabilityQualities" class="capability-choices"></div></fieldset>
-            <fieldset class="capability-options"><legend>返回格式 response_format（不勾选则不发送）</legend><div id="capabilityFormats" class="capability-choices"></div></fieldset>
-            <div class="capability-limits">
-              <label>最大生成张数<select id="capabilityMaxCount"><option value="1">1 张</option><option value="2">2 张</option><option value="3">3 张</option><option value="4">4 张</option></select></label>
-              <label>参考图数量<select id="capabilityMaxReferences"><option value="0">不支持参考图</option><option value="1">最多 1 张</option><option value="2">最多 2 张</option><option value="3">最多 3 张</option><option value="4">最多 4 张</option></select></label>
-              <label>参考图上传字段<select id="capabilityImageField"><option value="auto">自动 · 单张 image / 多张 image[]</option><option value="image">image（多图重复此字段）</option><option value="image[]">image[]（单图也使用此字段）</option></select></label>
-            </div>
-            <p class="field-hint">允许值仍需服务实际支持。参考图调用 /images/edits；修改能力不会自动获得该接口。应用最多生成 4 张、参考图最多 4 张。</p>
-          </fieldset>
-          <p id="capabilitySummary" class="field-hint" role="status"></p>
-          <label class="field-label" for="responseFormat">图片返回格式</label>
-          <div class="select-wrap format-select"><select id="responseFormat"><option value="auto">自动 · 使用接口默认值</option><option value="b64_json">Base64 · b64_json</option><option value="url">图片链接 · url</option></select><span>⌄</span></div>
-          <p class="field-hint">按模型能力显示可用选项；默认不发送 response_format。</p>
-          <div class="form-divider"></div>
-          <div class="settings-actions"><button class="button secondary" type="button" id="testButton"><span>⌁</span> 测试连接</button><button class="button text-button" type="button" id="clearButton">清除密钥</button><button class="button primary" type="submit" id="saveSettings">完成设置</button></div>
-          <div class="status-box" id="statusBox" role="status" aria-live="polite"><span class="status-icon">i</span><span id="statusText">API Key 仅通过本机后端转发，不会保存在浏览器或服务器。</span></div>
-        </form>
+    <div class="settings-tabs" role="tablist" aria-label="API 配置类型">
+      <button id="imageSettingsTab" type="button" role="tab" aria-selected="true" aria-controls="settingsForm">图片生成 API</button>
+      <button id="optimizerSettingsTab" type="button" role="tab" aria-selected="false" aria-controls="optimizerSettingsForm" tabindex="-1">提示词优化 API</button>
+    </div>
+    <form id="settingsForm" autocomplete="off" role="tabpanel" aria-labelledby="imageSettingsTab">
+      <div class="preset-toolbar" aria-label="图片生成 API 预设">
+        <label for="imagePreset">配置预设</label>
+        <select id="imagePreset"><option value="">不使用预设</option></select>
+        <input id="imagePresetName" type="text" maxlength="40" placeholder="预设名称">
+        <button class="button secondary" id="saveImagePreset" type="button">保存</button>
+        <button class="button text-button" id="deleteImagePreset" type="button" disabled>删除</button>
+      </div>
+      <p class="field-hint">预设保存 URL、模型、能力和默认参数，不保存 API Key。切换预设会清空当前 API Key。</p>
+      <label class="field-label" for="apiUrl">API URL <span class="required">*</span></label>
+      <div class="input-wrap"><span class="input-prefix" aria-hidden="true">↗</span><input id="apiUrl" name="apiUrl" type="url" placeholder="https://api.openai.com/v1" required></div>
+      <p class="field-hint">支持 Base URL（含 /v1）或完整图片接口地址。有参考图时会调用同一服务的图片编辑接口。</p>
+      <label class="field-label" for="apiKey">API KEY <span class="required">*</span></label>
+      <div class="input-wrap"><span class="input-prefix" aria-hidden="true">⌘</span><input id="apiKey" name="apiKey" type="password" placeholder="sk-••••••••••••••••" required><button type="button" class="reveal-key" id="revealKey" aria-label="显示 API Key">◉</button></div>
+      <label class="field-label" for="model">MODEL（模型名称）<span class="required">*</span></label>
+      <div class="input-wrap"><span class="input-prefix" aria-hidden="true">✣</span><input id="model" name="model" type="text" placeholder="例如：gpt-image-1" required></div>
+      <div class="quick-models"><span>快速填入</span><button type="button" data-model="gpt-image-1">gpt-image-1</button><button type="button" data-model="dall-e-3">dall-e-3</button></div>
+      <label class="field-label" for="capabilityMode">模型能力</label>
+      <div class="select-wrap"><select id="capabilityMode"><option value="auto">自动识别 · 按模型名称</option><option value="custom">自定义能力 · 按服务商文档</option></select></div>
+      <p class="field-hint">自动识别是常见模型的参数预设，不会探测服务商。第三方接口有差异时请选择自定义；未勾选的参数仅保留接口默认值，不会发送对应字段。</p>
+      <fieldset id="customCapabilities" class="capability-fields" hidden disabled>
+        <legend>允许的接口参数</legend>
+        <fieldset class="capability-options"><legend>尺寸 size（不勾选则不发送）</legend><div id="capabilitySizes" class="capability-choices"></div></fieldset>
+        <label class="custom-size-capability"><input id="capabilityCustomSizes" type="checkbox">支持自定义尺寸（按服务商文档开启）</label>
+        <p class="field-hint">开启后可选择更多比例、2K / 4K 或输入宽高。应用接受 64–8192 像素、8 的倍数，实际范围仍以接口为准。</p>
+        <fieldset class="capability-options"><legend>画质 quality（不勾选则不发送）</legend><div id="capabilityQualities" class="capability-choices"></div></fieldset>
+        <fieldset class="capability-options"><legend>返回格式 response_format（不勾选则不发送）</legend><div id="capabilityFormats" class="capability-choices"></div></fieldset>
+        <div class="capability-limits">
+          <label>最大生成张数<select id="capabilityMaxCount"><option value="1">1 张</option><option value="2">2 张</option><option value="3">3 张</option><option value="4">4 张</option></select></label>
+          <label>参考图数量<select id="capabilityMaxReferences"><option value="0">不支持参考图</option><option value="1">最多 1 张</option><option value="2">最多 2 张</option><option value="3">最多 3 张</option><option value="4">最多 4 张</option></select></label>
+          <label>参考图上传字段<select id="capabilityImageField"><option value="auto">自动 · 单张 image / 多张 image[]</option><option value="image">image（多图重复此字段）</option><option value="image[]">image[]（单图也使用此字段）</option></select></label>
+        </div>
+        <p class="field-hint">允许值仍需服务实际支持。参考图调用 /images/edits；修改能力不会自动获得该接口。应用最多生成 4 张、参考图最多 4 张。</p>
+      </fieldset>
+      <p id="capabilitySummary" class="field-hint" role="status"></p>
+      <label class="field-label" for="responseFormat">图片返回格式</label>
+      <div class="select-wrap format-select"><select id="responseFormat"><option value="auto">自动 · 使用接口默认值</option><option value="b64_json">Base64 · b64_json</option><option value="url">图片链接 · url</option></select><span aria-hidden="true">⌄</span></div>
+      <p class="field-hint">按模型能力显示可用选项；默认不发送 response_format。</p>
+      <div class="form-divider"></div>
+      <div class="settings-actions">
+        <button class="button secondary" type="button" id="testButton">测试连接</button>
+        <button class="button text-button" type="button" id="clearButton">清除密钥</button>
+        <button class="button primary" type="submit" id="saveSettings">完成设置</button>
+      </div>
+      <div class="status-box" id="statusBox" role="status" aria-live="polite"><span class="status-icon" aria-hidden="true">i</span><span id="statusText">API Key 仅通过本机后端转发，不会保存在浏览器或服务器。</span></div>
+    </form>
     <form id="optimizerSettingsForm" autocomplete="off" role="tabpanel" aria-labelledby="optimizerSettingsTab" hidden>
       <p class="optimizer-intro">独立配置文本模型，仅点击“优化提示词”时调用。可以与生图接口使用不同服务。</p>
-      <div class="preset-toolbar" aria-label="提示词优化 API 预设"><label for="optimizerPreset">配置预设</label><select id="optimizerPreset"><option value="">不使用预设</option></select><input id="optimizerPresetName" type="text" maxlength="40" placeholder="预设名称"><button class="button secondary" id="saveOptimizerPreset" type="button">保存</button><button class="button text-button" id="deleteOptimizerPreset" type="button" disabled>删除</button></div>
-      <p class="field-hint preset-hint">预设只保存 URL 和模型，不保存优化 API Key。切换预设会清空当前优化密钥。</p>
+      <div class="preset-toolbar" aria-label="提示词优化 API 预设">
+        <label for="optimizerPreset">配置预设</label>
+        <select id="optimizerPreset"><option value="">不使用预设</option></select>
+        <input id="optimizerPresetName" type="text" maxlength="40" placeholder="预设名称">
+        <button class="button secondary" id="saveOptimizerPreset" type="button">保存</button>
+        <button class="button text-button" id="deleteOptimizerPreset" type="button" disabled>删除</button>
+      </div>
+      <p class="field-hint">预设只保存 URL 和模型，不保存优化 API Key。切换预设会清空当前优化密钥。</p>
       <label class="field-label" for="optimizerUrl">API URL <span class="required">*</span></label>
-      <div class="input-wrap"><span class="input-prefix">↗</span><input id="optimizerUrl" type="url" placeholder="https://你的文本服务地址/v1" required></div>
+      <div class="input-wrap"><span class="input-prefix" aria-hidden="true">↗</span><input id="optimizerUrl" type="url" placeholder="https://你的文本服务地址/v1" required></div>
       <p class="field-hint">支持 Base URL（含 /v1）或完整 /chat/completions 地址。</p>
       <label class="field-label" for="optimizerKey">API KEY <span class="required">*</span></label>
-      <div class="input-wrap"><span class="input-prefix">⌘</span><input id="optimizerKey" type="password" placeholder="填写优化服务的 API Key" required><button id="revealOptimizerKey" class="reveal-key" type="button" aria-label="显示优化 API Key">◉</button></div>
+      <div class="input-wrap"><span class="input-prefix" aria-hidden="true">⌘</span><input id="optimizerKey" type="password" placeholder="填写优化服务的 API Key" required><button id="revealOptimizerKey" class="reveal-key" type="button" aria-label="显示优化 API Key">◉</button></div>
       <label class="field-label" for="optimizerModel">MODEL（文本模型）<span class="required">*</span></label>
-      <div class="input-wrap"><span class="input-prefix">✣</span><input id="optimizerModel" type="text" placeholder="填写服务支持的文本模型名称" required></div>
+      <div class="input-wrap"><span class="input-prefix" aria-hidden="true">✣</span><input id="optimizerModel" type="text" placeholder="填写服务支持的文本模型名称" required></div>
       <p class="field-hint">使用 OpenAI 兼容的 Chat Completions 接口。按题材优化，结合所选尺寸和张数，保留参考图编号关系，不上传参考图片内容。</p>
       <div class="form-divider"></div>
-      <div class="settings-actions"><button class="button secondary" id="testOptimizer" type="button">测试连接</button><button class="button text-button" id="clearOptimizerKey" type="button">清除密钥</button><button class="button primary" type="submit">完成设置</button></div>
-      <div class="status-box" id="optimizerStatusBox" role="status" aria-live="polite"><span class="status-icon">i</span><span id="optimizerStatusText">优化为可选操作。不配置或不点击优化，也可以直接生成图片。</span></div>
+      <div class="settings-actions">
+        <button class="button secondary" id="testOptimizer" type="button">测试连接</button>
+        <button class="button text-button" id="clearOptimizerKey" type="button">清除密钥</button>
+        <button class="button primary" type="submit">完成设置</button>
+      </div>
+      <div class="status-box" id="optimizerStatusBox" role="status" aria-live="polite"><span class="status-icon" aria-hidden="true">i</span><span id="optimizerStatusText">优化为可选操作。不配置或不点击优化，也可以直接生成图片。</span></div>
     </form>
   </dialog>
+
   <dialog id="optimizationDialog" class="optimization-dialog" aria-labelledby="optimizationTitle">
-    <header class="modal-heading"><div><span class="section-label">PROMPT REVIEW</span><h2 id="optimizationTitle">确认优化结果</h2></div><button class="close-button" id="closeOptimization" type="button" aria-label="保留原提示词并关闭">×</button></header>
+    <header class="modal-heading">
+      <div><span class="section-label">Prompt Review</span><h2 id="optimizationTitle">确认优化结果</h2></div>
+      <button class="close-button" id="closeOptimization" type="button" aria-label="保留原提示词并关闭">×</button>
+    </header>
     <p class="panel-intro">优化结果不会自动替换原提示词。你可以先编辑右侧内容，再选择是否采用。</p>
     <p class="optimizer-intro" id="optimizationStrengthSummary"></p>
     <div class="prompt-comparison">
@@ -251,12 +387,23 @@
       <label class="prompt-column" for="optimizedPromptPreview"><span>优化结果（可编辑）</span><textarea id="optimizedPromptPreview" maxlength="10000"></textarea></label>
     </div>
     <p class="workspace-status" id="optimizationReviewStatus" role="status" aria-live="polite">确认采用后仍可撤销。</p>
-    <div class="optimization-actions"><button class="button secondary" id="keepOriginalPrompt" type="button">保留原提示词</button><button class="button primary" id="acceptOptimizedPrompt" type="button">采用优化结果</button></div>
+    <div class="optimization-actions">
+      <button class="button secondary" id="keepOriginalPrompt" type="button">保留原提示词</button>
+      <button class="button primary" id="acceptOptimizedPrompt" type="button">采用优化结果</button>
+    </div>
   </dialog>
+
   <dialog id="sizeDialog" class="size-dialog" aria-labelledby="sizeDialogTitle">
-    <header class="size-heading"><div><h2 id="sizeDialogTitle">设置图像尺寸</h2><p id="sizeCurrent" aria-live="polite">当前：由接口决定</p></div><button id="closeSizeDialog" class="size-close" type="button" aria-label="关闭尺寸设置">×</button></header>
+    <header class="size-heading">
+      <div><h2 id="sizeDialogTitle">设置图像尺寸</h2><p id="sizeCurrent" aria-live="polite">当前：由接口决定</p></div>
+      <button id="closeSizeDialog" class="size-close" type="button" aria-label="关闭尺寸设置">×</button>
+    </header>
     <button id="sizeDefault" class="size-option size-default" type="button">由接口决定</button>
-    <div class="size-tabs" role="group" aria-label="尺寸设置方式"><button type="button" data-size-mode="auto">自动</button><button type="button" data-size-mode="ratio">按比例</button><button type="button" data-size-mode="custom">自定义宽高</button></div>
+    <div class="size-tabs" role="group" aria-label="尺寸设置方式">
+      <button type="button" data-size-mode="auto">自动</button>
+      <button type="button" data-size-mode="ratio">按比例</button>
+      <button type="button" data-size-mode="custom">自定义宽高</button>
+    </div>
     <div id="sizeAutoPanel"><p class="size-hint">自动选择画布尺寸；接口未声明支持自动尺寸时，使用接口默认值。</p></div>
     <div id="sizeRatioPanel" hidden>
       <p class="size-label">基准分辨率</p><div id="sizeResolutions" class="size-resolutions" role="group" aria-label="基准分辨率"></div>
@@ -265,12 +412,19 @@
       <div id="sizeRatioInputs" class="size-inputs" hidden><label>比例宽<input id="sizeRatioWidth" type="number" min="1" max="100" step="1" value="1"></label><span aria-hidden="true">:</span><label>比例高<input id="sizeRatioHeight" type="number" min="1" max="100" step="1" value="1"></label></div>
       <p class="size-hint">按长边计算分辨率，优先匹配接口标准尺寸；计算结果对齐至 8 像素。</p>
     </div>
-    <div id="sizeCustomPanel" hidden><div class="size-inputs"><label>宽度（px）<input id="sizeWidth" type="number" min="64" max="8192" step="8" value="1024"></label><span aria-hidden="true">×</span><label>高度（px）<input id="sizeHeight" type="number" min="64" max="8192" step="8" value="1024"></label></div><p class="size-hint">每边 64–8192 像素，须为 8 的倍数。</p></div>
+    <div id="sizeCustomPanel" hidden>
+      <div class="size-inputs"><label>宽度（px）<input id="sizeWidth" type="number" min="64" max="8192" step="8" value="1024"></label><span aria-hidden="true">×</span><label>高度（px）<input id="sizeHeight" type="number" min="64" max="8192" step="8" value="1024"></label></div>
+      <p class="size-hint">每边 64–8192 像素，须为 8 的倍数。</p>
+    </div>
     <div id="sizeSupportedPanel"><p class="size-label">接口标准尺寸</p><div id="sizeSupported" class="size-supported"></div></div>
     <p id="sizeCapabilityHint" class="size-hint" hidden>当前配置仅支持标准尺寸。若服务商支持更多尺寸，可在 API 设置 → 自定义能力中开启“支持自定义尺寸”。</p>
     <p id="sizeError" class="size-error" role="status" hidden></p>
-    <div class="size-footer"><button id="cancelSizeDialog" type="button" class="button secondary">取消</button><button id="applySize" type="button" class="button primary">应用尺寸</button></div>
+    <div class="size-footer">
+      <button id="cancelSizeDialog" type="button" class="button secondary">取消</button>
+      <button id="applySize" type="button" class="button primary">应用尺寸</button>
+    </div>
   </dialog>
+
   <dialog id="deleteHistoryDialog" class="delete-history-dialog" aria-labelledby="deleteHistoryTitle" aria-describedby="deleteHistoryDescription">
     <h2 id="deleteHistoryTitle">删除图片</h2>
     <p id="deleteHistoryDescription">确定要删除该张图片的记录吗？删除后无法恢复。</p>
@@ -279,9 +433,34 @@
       <button id="confirmHistoryDeletion" class="confirm-delete" type="submit" value="delete">确认删除</button>
     </form>
   </dialog>
-  <dialog id="previewDialog" class="preview-dialog" aria-label="图片预览"><button id="closePreview" class="close-button preview-close" type="button" aria-label="关闭预览">×</button><img id="previewImage" alt="生成图片大图预览"><p id="previewPrompt"></p></dialog>
-  <dialog id="templatePromptDialog" class="template-prompt-dialog" aria-labelledby="templatePromptTitle"><button id="closeTemplatePrompt" class="close-button preview-close" type="button" aria-label="关闭模板详情">×</button><img id="templatePromptImage" alt=""><div class="template-dialog-content"><span class="template-card-category" id="templatePromptCategory"></span><h2 id="templatePromptTitle"></h2><p id="templatePromptDescription"></p><div class="template-prompt-box"><span>完整提示词</span><p id="templatePromptText"></p></div><button class="button primary template-use-button" id="useTemplateFromDialog" type="button">使用此提示词</button></div></dialog>
-  <dialog id="removeGalleryDialog" class="delete-history-dialog" aria-labelledby="removeGalleryTitle"><h2 id="removeGalleryTitle">移出画廊</h2><p>确定将这幅作品移出画廊吗？最近生成记录和已下载的文件不受影响。</p><form method="dialog" class="delete-history-actions"><button type="submit" value="cancel" autofocus>取消</button><button type="submit" value="remove" class="confirm-delete">确认移除</button></form></dialog>
+
+  <dialog id="previewDialog" class="preview-dialog" aria-label="图片预览">
+    <button id="closePreview" class="close-button preview-close" type="button" aria-label="关闭预览">×</button>
+    <img id="previewImage" alt="生成图片大图预览">
+    <p id="previewPrompt"></p>
+  </dialog>
+
+  <dialog id="templatePromptDialog" class="template-prompt-dialog" aria-labelledby="templatePromptTitle">
+    <button id="closeTemplatePrompt" class="close-button preview-close" type="button" aria-label="关闭模板详情">×</button>
+    <img id="templatePromptImage" alt="">
+    <div class="template-dialog-content">
+      <span class="template-card-category" id="templatePromptCategory"></span>
+      <h2 id="templatePromptTitle"></h2>
+      <p id="templatePromptDescription"></p>
+      <div class="template-prompt-box"><span>完整提示词</span><p id="templatePromptText"></p></div>
+      <button class="button primary template-use-button" id="useTemplateFromDialog" type="button">使用此提示词</button>
+    </div>
+  </dialog>
+
+  <dialog id="removeGalleryDialog" class="delete-history-dialog" aria-labelledby="removeGalleryTitle">
+    <h2 id="removeGalleryTitle">移出画廊</h2>
+    <p>确定将这幅作品移出画廊吗？最近生成记录和已下载的文件不受影响。</p>
+    <form method="dialog" class="delete-history-actions">
+      <button type="submit" value="cancel" autofocus>取消</button>
+      <button type="submit" value="remove" class="confirm-delete">确认移除</button>
+    </form>
+  </dialog>
+
   <script src="/gallery.js"></script>
   <script src="/style-templates.js"></script>
   <script src="/model-capabilities.js"></script>

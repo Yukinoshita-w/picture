@@ -10,6 +10,7 @@ const generateButton = $('#generateButton');
 const historyGrid = $('#historyGrid');
 const memoryHistory = [];
 let displayedHistory = [];
+let activeHistoryId = null;
 let historyDeleting = false;
 const referenceImages = [];
 let loadingReferences = false;
@@ -602,12 +603,48 @@ function createReuse(prompt) {
   button.addEventListener('click', () => reusePrompt(prompt));
   return button;
 }
+function stageTitleFor(prompt) {
+  const text = String(prompt || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '开始你的创作';
+  const firstClause = text.split(/[，。；、,.!?！？;]/)[0] || text;
+  const short = firstClause.length > 26 ? firstClause.slice(0, 26) + '…' : firstClause;
+  return short;
+}
+function renderStageHead(prompt, count) {
+  const title = $('#stageTitle');
+  if (title) title.textContent = stageTitleFor(prompt);
+  const eyebrow = $('#stageEyebrow');
+  if (eyebrow) eyebrow.textContent = referenceImages.length ? 'Image → Image' : 'Text → Image';
+  const clock = $('#stageClock');
+  if (clock) clock.textContent = count ? 'Plate ' + String(count).padStart(2, '0') : 'Plate —';
+  const lede = $('#stageLede');
+  if (lede) {
+    lede.hidden = Boolean(prompt);
+    lede.textContent = '写下你想看见的画面，从主体、光线、材质到镜头，越具体越接近。';
+  }
+}
+function renderPlateMeta() {
+  const panel = $('#plateMeta');
+  if (!panel) return;
+  const size = $('#size').value;
+  const quality = $('#quality').value;
+  const qualityLabels = { auto: '自动', low: '低', medium: '中', high: '高', standard: '标准', hd: '高清' };
+  $('#metaModel').textContent = settings.model.value.trim() || '—';
+  $('#metaSize').textContent = size && size !== 'default' ? size.replace('x', ' × ') : '由接口决定';
+  $('#metaQuality').textContent = quality && quality !== 'default' ? (qualityLabels[quality] || quality) : '默认';
+  $('#metaCount').textContent = $('#count').value + ' 张';
+  const elapsed = $('#metaElapsed');
+  if (!elapsed.dataset.stamp) elapsed.textContent = '—';
+  panel.hidden = false;
+}
 function renderResults(images, prompt) {
   const grid = document.createElement('div');
   grid.className = 'result-grid';
+  let rendered = 0;
   images.forEach((image, index) => {
     const src = imageSource(image);
     if (!src) return;
+    rendered += 1;
     const card = document.createElement('article');
     card.className = 'result-card';
     const imageEl = createImage(src, image.revised_prompt || prompt);
@@ -615,7 +652,7 @@ function renderResults(images, prompt) {
     const actions = document.createElement('div');
     actions.className = 'result-actions';
     const label = document.createElement('span');
-    label.textContent = 'IMAGE ' + String(index + 1).padStart(2, '0');
+    label.textContent = 'Plate ' + String(index + 1).padStart(2, '0');
     const promptActions = document.createElement('div');
     promptActions.className = 'result-prompt-actions';
     promptActions.append(createReuse(prompt), artGallery.submitButton({ id: image.id, src, prompt, created: image.created }));
@@ -624,12 +661,22 @@ function renderResults(images, prompt) {
     if (image.revised_prompt) {
       const revised = document.createElement('p');
       revised.className = 'revised-prompt';
-      revised.textContent = '优化后的提示词：' + image.revised_prompt;
+      revised.textContent = '接口改写：' + image.revised_prompt;
       card.appendChild(revised);
     }
     grid.appendChild(card);
   });
   resultArea.replaceChildren(grid);
+  renderStageHead(prompt, rendered);
+  setStagePrompt(prompt);
+  activeHistoryId = null;
+  historyGrid.querySelectorAll('.history-card').forEach(node => node.classList.remove('is-active'));
+  const elapsed = $('#metaElapsed');
+  if (elapsed) {
+    const stamp = elapsed.dataset.stamp;
+    elapsed.textContent = stamp ? stamp + ' s' : '—';
+  }
+  renderPlateMeta();
 }
 // IndexedDB stores large image files without the small localStorage quota.
 let databasePromise;
@@ -680,16 +727,60 @@ async function deleteHistoryItems(ids) {
     if (ids.includes(memoryHistory[index].id)) memoryHistory.splice(index, 1);
   }
 }
+function setStagePrompt(text) {
+  // Sits directly under the image and its metadata strip.
+  const panel = $('#stagePrompt');
+  const body = $('#stagePromptText');
+  if (!panel || !body) return;
+  const value = String(text || '').trim();
+  body.textContent = value;
+  panel.hidden = !value;
+}
+// Clicking a history entry must put that artwork in the stage, not just relabel it.
+async function showHistoryItem(item, card) {
+  const src = safeImageSource(item.src);
+  if (!src) return;
+  activeHistoryId = item.id;
+  historyGrid.querySelectorAll('.history-card').forEach(node => node.classList.toggle('is-active', node === card));
+  const image = createImage(src, item.prompt);
+  image.className = 'result-image';
+  const frame = document.createElement('figure');
+  frame.className = 'stage-plate';
+  const actions = document.createElement('div');
+  actions.className = 'stage-plate-actions';
+  actions.append(createReuse(item.prompt), artGallery.submitButton(item), createDownload(src));
+  frame.append(image, actions);
+  const grid = document.createElement('div');
+  grid.className = 'result-grid';
+  grid.appendChild(frame);
+  resultArea.replaceChildren(grid);
+  renderStageHead(item.prompt, 1);
+  setStagePrompt(item.prompt);
+  const elapsed = $('#metaElapsed');
+  if (elapsed) elapsed.textContent = '—';
+  renderPlateMeta();
+  setStatus('正在查看历史作品，可直接复用提示词或下载原图。');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 async function renderHistory() {
   const items = (await readHistory()).filter(item => safeImageSource(item.src));
   displayedHistory = items;
   historyGrid.replaceChildren();
   $('#historySection').hidden = !items.length;
-  items.forEach(item => {
+  const railEmpty = $('#railEmpty');
+  if (railEmpty) railEmpty.hidden = Boolean(items.length);
+  const railCount = $('#railCount');
+  if (railCount) railCount.textContent = String(items.length).padStart(2, '0');
+  items.forEach((item, index) => {
     const src = safeImageSource(item.src);
     if (!src) return;
     const card = document.createElement('article');
     card.className = 'history-card';
+    card.tabIndex = 0;
+    card.dataset.historyId = item.id;
+    const order = document.createElement('span');
+    order.className = 'history-index';
+    order.textContent = String(index + 1).padStart(2, '0');
     const caption = document.createElement('small');
     caption.textContent = item.prompt;
     const actions = document.createElement('div');
@@ -702,13 +793,33 @@ async function renderHistory() {
     remove.className = 'download-link history-delete';
     remove.textContent = '删除';
     remove.setAttribute('aria-label', `删除图片：${item.prompt || '生成图片'}`);
-    remove.addEventListener('click', () => confirmHistoryDeletion(item.id));
+    remove.addEventListener('click', event => { event.stopPropagation(); confirmHistoryDeletion(item.id); });
     const imageActions = document.createElement('div');
     imageActions.className = 'history-image-actions';
     imageActions.append(remove, createDownload(src));
     actions.append(promptActions, imageActions);
-    card.append(createImage(src, item.prompt), caption, actions);
+    // Built by hand, not via createImage(): that helper wires a lightbox onto the
+    // element, and the rail thumbnail must select the entry instead of opening one.
+    const thumb = document.createElement('img');
+    thumb.className = 'history-thumb';
+    thumb.src = src;
+    thumb.alt = item.prompt || '历史作品缩略图';
+    thumb.loading = 'lazy';
+    thumb.tabIndex = 0;
+    const openThumb = () => showHistoryItem(item, card);
+    thumb.addEventListener('click', event => { event.stopPropagation(); openThumb(); });
+    thumb.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.stopPropagation(); event.preventDefault(); openThumb(); }
+    });
+    thumb.addEventListener('error', () => {
+      thumb.classList.add('image-load-error');
+      thumb.alt = '缩略图无法显示，可在右侧查看原图';
+    });
+    card.append(order, thumb, caption, actions);
+    card.addEventListener('click', () => showHistoryItem(item, card));
+    card.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target === card) showHistoryItem(item, card); });
     historyGrid.appendChild(card);
+    if (activeHistoryId === item.id) card.classList.add('is-active');
   });
   updateHistoryDeletion();
 }
@@ -968,6 +1079,7 @@ $('#generateForm').addEventListener('submit', async event => {
   }
   saveSettings();
   const task = beginTask('generate');
+  const startedAt = performance.now();
   setStatus('正在调用生图服务，请保持页面开启。最多等待 5 分钟。');
   $('#galleryScroll').scrollTop = 0;
   try {
@@ -979,6 +1091,8 @@ $('#generateForm').addEventListener('submit', async event => {
     if (!taskIsCurrent(task)) return;
     if (!data.images?.length || !data.images.every(image => imageSource(image))) throw new Error('接口没有返回有效的图片');
     const images = data.images.map((image, index) => ({ ...image, id: crypto.randomUUID(), created: Date.now() + index }));
+    const elapsedLabel = $('#metaElapsed');
+    if (elapsedLabel) elapsedLabel.dataset.stamp = ((performance.now() - startedAt) / 1000).toFixed(1);
     renderResults(images, prompt);
     setStatus('生成完成，共 ' + data.images.length + ' 张图片。', 'success');
     historyQueue = historyQueue.then(() => addToHistory(images, prompt)).catch(() => {});
@@ -1079,7 +1193,7 @@ function templateImage(template) {
 function renderTemplates() {
   const search = $('#templateSearch').value.trim();
   const templates = StyleTemplates.filter(template => templateMatches(template, search, activeTemplateCategory));
-  $('#templatesCount').textContent = '共 ' + templates.length + ' 个模板';
+  $('#templatesCount').textContent = String(templates.length);
   $('#templateEmpty').hidden = templates.length > 0;
   const grid = $('#templateGrid');
   grid.replaceChildren(...templates.map(template => {
@@ -1201,6 +1315,24 @@ for (const kind of ['image', 'optimizer']) {
 }
 updateActionState();
 applyTheme(safeStorage.get('prompt-studio-theme') === 'dark');
+// Keep the fixed composer from covering the last row: measure it instead of guessing a padding value.
+const composerPanel = document.querySelector('.composer-panel');
+function syncComposerHeight() {
+  if (!composerPanel) return;
+  const height = Math.ceil(composerPanel.getBoundingClientRect().height);
+  document.documentElement.style.setProperty('--composer-h', height + 'px');
+}
+syncComposerHeight();
+if (composerPanel && 'ResizeObserver' in window) {
+  new ResizeObserver(syncComposerHeight).observe(composerPanel);
+} else {
+  window.addEventListener('resize', syncComposerHeight);
+}
+document.querySelectorAll('[data-starter]').forEach(button => button.addEventListener('click', () => {
+  promptInput.value = button.dataset.starter;
+  updateCounter();
+  promptInput.focus();
+}));
 const artGallery = createArtGallery({ safeImageSource, preview: openPreview, download: downloadImage, reuse: reusePrompt, notify: setStatus });
 artGallery.init();
 renderRoute();
