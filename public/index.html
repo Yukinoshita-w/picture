@@ -160,21 +160,301 @@
 
   <section id="seriesPage" class="series-page" data-page="series" hidden aria-labelledby="seriesTitle">
     <div class="series-shell">
-      <header class="masthead">
+      <header class="masthead series-masthead">
         <div>
           <span class="section-label">Series Creation · 02</span>
           <h1 id="seriesTitle">系列创作<em>。</em></h1>
-          <p class="lede">把一个主题展开成连续的画面、角色与节奏。系列工作台正在准备中——你仍可以从当前画面延展变体。</p>
+          <p class="lede">用一份风格圣经和一组参考图，把一个主题展开成彼此一致的画面。</p>
+        </div>
+        <div class="masthead-count">
+          <b id="seriesCount" aria-live="polite">00</b>
+          <span>个系列 · 本机保存</span>
         </div>
       </header>
-      <div class="series-grid">
-        <article class="series-card"><span class="section-label">A · 同一主体</span><h2>保留角色，换环境</h2><p>锁定人物与服装，只改变场景、光线与时间。适合连续叙事与角色设定。</p></article>
-        <article class="series-card"><span class="section-label">B · 同一光线</span><h2>保留氛围，换主体</h2><p>沿用同一套光比与色温，替换主体与构图，得到统一的视觉语言。</p></article>
-        <article class="series-card"><span class="section-label">C · 同一构图</span><h2>保留框架，换细节</h2><p>保持机位与画幅不变，替换材质、颜色与配饰，用于系列海报与封面。</p></article>
+
+      <div class="series-layout">
+        <aside class="series-sidebar" aria-label="系列列表">
+          <div class="series-sidebar-head">
+            <span class="section-label">My Series</span>
+            <button type="button" class="series-new" id="seriesNew" title="新建系列">＋ 新建</button>
+          </div>
+          <ul class="series-list" id="seriesList"></ul>
+          <p class="series-list-empty" id="seriesListEmpty">还没有系列。新建一个，写一句主题，或直接上传参考图。</p>
+          <div class="series-sidebar-foot">
+            <button type="button" class="text-action" id="seriesImport">导入系列包</button>
+            <button type="button" class="text-action" id="seriesExport" disabled>导出当前系列</button>
+            <input type="file" id="seriesImportInput" accept="application/json,.json" hidden>
+          </div>
+        </aside>
+
+        <div class="series-main" id="seriesMain" hidden>
+          <header class="series-header">
+            <div class="series-title-row">
+              <input id="seriesName" class="series-name-input" type="text" maxlength="60" aria-label="系列名称" placeholder="未命名系列">
+              <span class="series-badge" id="seriesVersionBadge">圣经 v1</span>
+              <span class="series-badge" id="seriesGalleryBadge">图库 0 张</span>
+              <span class="series-badge" id="seriesProgressBadge">0 / 0 帧出图</span>
+            </div>
+            <nav class="series-tabs" role="tablist" aria-label="系列视图">
+              <button type="button" role="tab" data-series-view="outline" aria-selected="true">大纲</button>
+              <button type="button" role="tab" data-series-view="matrix" aria-selected="false">矩阵</button>
+              <button type="button" role="tab" data-series-view="gallery" aria-selected="false">图库</button>
+              <button type="button" role="tab" data-series-view="canon" aria-selected="false">圣经</button>
+              <button type="button" role="tab" data-series-view="lore" aria-selected="false">档案</button>
+            </nav>
+          </header>
+
+          <div class="series-view" id="seriesViewOutline" data-series-view="outline">
+            <div class="series-outline-toolbar">
+              <p class="series-hint">一句话写不出的内容，可以先放进「圣经」；一帧说不完的故事，就多建几帧。</p>
+              <div class="series-outline-actions">
+                <button type="button" class="button secondary" id="seriesAddAllGallery" title="把已生成且尚未入藏的帧复制到作品画廊" disabled>全部加入画廊</button>
+                <button type="button" class="button secondary" id="seriesSuggestFrames">从档案拆分帧</button>
+                <button type="button" class="button secondary" id="seriesAddShot">＋ 添加一帧</button>
+              </div>
+            </div>
+            <div class="series-shot-selectbar" id="seriesShotSelectBar" hidden>
+              <label class="series-select-all">
+                <input type="checkbox" id="seriesSelectAllShots">
+                <span>全选</span>
+              </label>
+              <span class="series-selection-count" id="seriesShotSelectionCount">已选 0 帧</span>
+              <button type="button" class="button primary series-batch-selected" id="seriesBatchSelected" disabled>批量生成所选</button>
+            </div>
+            <section class="series-guide" id="seriesGuide" hidden aria-label="开始使用系列">
+              <div class="series-guide-step">
+                <span class="series-guide-index">01</span>
+                <div class="series-guide-body">
+                  <h2>先定义这一系列的视觉</h2>
+                  <p>风格圣经决定所有帧共同的部分：媒介、色板、光线、镜头。可以自己填，也可以让文本模型从主题原文提炼。</p>
+                  <div class="series-guide-actions">
+                    <button type="button" class="button secondary" id="seriesGuideCanon">手动填写圣经</button>
+                    <button type="button" class="button secondary" id="seriesGuideExtract">从主题提炼</button>
+                  </div>
+                </div>
+              </div>
+              <div class="series-guide-step">
+                <span class="series-guide-index">02</span>
+                <div class="series-guide-body">
+                  <h2>上传参考图（可选，但最有效）</h2>
+                  <p>角色、风格、场景图能让后续每一帧更接近。上传后可以指定角色，并设为默认锚点。</p>
+                  <div class="series-guide-actions">
+                    <button type="button" class="button secondary" id="seriesGuideGallery">去图库上传</button>
+                  </div>
+                </div>
+              </div>
+              <div class="series-guide-step">
+                <span class="series-guide-index">03</span>
+                <div class="series-guide-body">
+                  <h2>添加帧并生成</h2>
+                  <p>一帧是一张画面。写好主体、动作、场景后生成；不满意就改描述再生成。</p>
+                  <div class="series-guide-actions">
+                    <button type="button" class="button secondary" id="seriesGuideAddShot">添加第一帧</button>
+                    <button type="button" class="button secondary" id="seriesGuideSuggest">从档案拆分帧</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <div class="series-shot-list" id="seriesShotList"></div>
+            <p class="series-empty" id="seriesShotsEmpty" hidden>还没有帧。点右上角「＋ 添加一帧」，或让模型按主题建议一份帧清单。</p>
+          </div>
+
+          <div class="series-view" id="seriesViewMatrix" data-series-view="matrix" hidden>
+            <div class="series-matrix-toolbar">
+              <p class="series-hint">矩阵按「圣经」里定义的轴展开：每一行是一种轴取值搭配，可以单独建帧，也可以一次全部建好再批量生成。适合"同一套风格，换场景/时间/景别"的成组画面。</p>
+              <div class="series-matrix-actions">
+                <button type="button" class="button secondary" id="seriesMatrixBuild">按轴展开全部帧</button>
+                <button type="button" class="button primary" id="seriesBatchStart">生成待生成的帧</button>
+              </div>
+            </div>
+            <p class="series-matrix-summary" id="seriesMatrixSummary"></p>
+            <div class="series-matrix" id="seriesMatrix"></div>
+            <p class="series-empty" id="seriesMatrixEmpty">还没有可变轴。到「圣经」底部的「可变轴」里定义两个轴，例如场景（邮局、天桥）与时间（雨夜、凌晨），矩阵就会按组合展开。</p>
+          </div>
+
+          <div class="series-view" id="seriesViewGallery" data-series-view="gallery" hidden>
+            <div class="series-gallery-toolbar">
+              <p class="series-hint">上传的图会成为系列的一致性锚点。每帧最多带 4 张，按角色、风格、场景、道具的顺序装配。</p>
+              <div class="series-gallery-actions">
+                <button type="button" class="button secondary" id="seriesGalleryAdd">＋ 上传参考图</button>
+                <input type="file" id="seriesGalleryInput" accept="image/png,image/jpeg,image/webp" multiple hidden>
+                <button type="button" class="button secondary" id="seriesGalleryAnalyze" disabled>分析未处理的图</button>
+              </div>
+            </div>
+            <div class="series-gallery-grid" id="seriesGalleryGrid"></div>
+            <p class="series-empty" id="seriesGalleryEmpty" hidden>还没有参考图。上传角色、风格、场景或道具图，能让整个系列更稳。</p>
+          </div>
+
+          <div class="series-view" id="seriesViewCanon" data-series-view="canon" hidden>
+            <div class="series-canon-toolbar">
+              <p class="series-hint">圣经是所有帧共享的视觉定义。改动锁定字段会创建新版本，已生成的帧保留原版本号。</p>
+              <div class="series-canon-actions">
+                <button type="button" class="button secondary" id="seriesCanonExtract">从主题提炼</button>
+                <button type="button" class="button secondary" id="seriesCanonSave">保存为新手版本</button>
+              </div>
+            </div>
+            <div class="series-canon-body">
+              <div class="series-canon-form" id="seriesCanonForm"></div>
+              <aside class="series-canon-preview" aria-label="锚点预览">
+                <span class="section-label">Anchor · 锚点句</span>
+                <p id="seriesAnchorPreview" class="series-anchor"></p>
+                <dl class="series-canon-meta">
+                  <div><dt>字符</dt><dd id="seriesAnchorChars">0</dd></div>
+                  <div><dt>版本</dt><dd id="seriesCanonVersion">1</dd></div>
+                </dl>
+                <p class="series-hint" id="seriesCanonWarning" hidden></p>
+              </aside>
+            </div>
+          </div>
+
+          <div class="series-view" id="seriesViewLore" data-series-view="lore" hidden>
+            <div class="series-lore-toolbar">
+              <p class="series-hint">超长原文放在这里。只有被某一帧引用的条目才会进入该帧的提示词，原文永远完整保留。</p>
+              <div class="series-lore-actions">
+                <label class="template-search series-lore-search" for="seriesLoreSearch">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg>
+                  <input id="seriesLoreSearch" type="search" placeholder="搜索档案" autocomplete="off">
+                </label>
+                <button type="button" class="button secondary" id="seriesLoreAdd">＋ 添加原文</button>
+              </div>
+            </div>
+            <div class="series-lore-list" id="seriesLoreList"></div>
+            <p class="series-empty" id="seriesLoreEmpty" hidden>还没有档案。粘贴设定集、小说片段或对白，切条后按需引用。</p>
+          </div>
+        </div>
+
+        <aside class="series-inspector" id="seriesInspector" hidden aria-label="选中帧详情">
+          <div class="series-inspector-head">
+            <span class="section-label" id="seriesInspectorLabel">Frame</span>
+            <button type="button" class="close-button" id="seriesInspectorClose" aria-label="关闭详情">×</button>
+          </div>
+          <div class="series-inspector-body" id="seriesInspectorBody"></div>
+        </aside>
       </div>
-      <a class="series-cta" href="#create">回到创作台 ↗</a>
+
+      <div class="series-batchbar" id="seriesBatchBar" hidden role="region" aria-label="批量生成">
+        <div class="series-batch-info">
+          <strong id="seriesBatchTitle">批量生成</strong>
+          <span id="seriesBatchProgress">0 / 0</span>
+          <span id="seriesBatchCost"></span>
+        </div>
+        <div class="series-batch-actions">
+          <label class="series-batch-price">单价 <input id="seriesBatchPrice" type="number" min="0" step="0.001" placeholder="可选"></label>
+          <button type="button" class="button secondary" id="seriesBatchPause" hidden>暂停</button>
+          <button type="button" class="button secondary" id="seriesBatchCancel">取消</button>
+        </div>
+      </div>
+
+      <p class="series-status" id="seriesStatus" role="status" aria-live="polite" hidden></p>
     </div>
   </section>
+
+  <dialog id="seriesNewDialog" class="settings-dialog series-new-dialog" aria-labelledby="seriesNewTitle">
+    <header class="modal-heading">
+      <div><span class="section-label">New Series</span><h2 id="seriesNewTitle">新建系列</h2></div>
+      <button class="close-button" id="seriesNewClose" type="button" aria-label="关闭">×</button>
+    </header>
+    <form id="seriesNewForm" autocomplete="off">
+      <label class="field-label" for="seriesNewTemplate">从模板开始（可选）</label>
+      <div class="select-wrap"><select id="seriesNewTemplate"><option value="">空白系列</option></select></div>
+      <p class="field-hint" id="seriesNewTemplateHint">模板只预填结构与风格字段，主题和内容仍由你决定。</p>
+      <label class="field-label" for="seriesNewName">系列名称</label>
+      <div class="input-wrap"><input id="seriesNewName" type="text" maxlength="60" placeholder="例如：雨夜邮差" required></div>
+      <label class="field-label" for="seriesNewTheme">主题原文（可选，可以很长）</label>
+      <textarea id="seriesNewTheme" class="series-theme-input" rows="7" placeholder="写下这个系列想表达的内容。可以是几句话，也可以粘贴整篇设定或小说片段。"></textarea>
+      <p class="field-hint" id="seriesNewHint">长文会自动分块提炼；提炼会把内容发送给你配置的文本模型。</p>
+      <div class="settings-actions">
+        <button class="button secondary" type="button" id="seriesNewCancel">取消</button>
+        <button class="button primary" type="submit">创建</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="seriesExtractDialog" class="settings-dialog series-extract-dialog" aria-labelledby="seriesExtractTitle">
+    <header class="modal-heading">
+      <div><span class="section-label">Model Reading</span><h2 id="seriesExtractTitle">提炼风格圣经</h2></div>
+      <button class="close-button" id="seriesExtractClose" type="button" aria-label="取消提炼">×</button>
+    </header>
+    <p class="panel-intro" id="seriesExtractIntro">正在把主题原文读成结构化的风格定义。可以随时暂停，已完成的块会保留。</p>
+    <div class="series-extract-progress"><div class="series-progress-track"><span id="seriesExtractBar"></span></div><p id="seriesExtractDetail">准备中…</p></div>
+    <p class="series-hint" id="seriesExtractEstimate"></p>
+    <div class="settings-actions">
+      <button class="button secondary" type="button" id="seriesExtractPause">暂停并保存进度</button>
+    </div>
+  </dialog>
+
+  <dialog id="seriesLoreDialog" class="settings-dialog series-lore-dialog" aria-labelledby="seriesLoreDialogTitle">
+    <header class="modal-heading">
+      <div><span class="section-label">Lore Entry</span><h2 id="seriesLoreDialogTitle">添加档案条目</h2></div>
+      <button class="close-button" id="seriesLoreClose" type="button" aria-label="关闭">×</button>
+    </header>
+    <form id="seriesLoreForm" autocomplete="off">
+      <label class="field-label" for="seriesLoreTitleInput">标题（可选）</label>
+      <div class="input-wrap"><input id="seriesLoreTitleInput" type="text" maxlength="60" placeholder="例如：铜制信匣的来历"></div>
+      <label class="field-label" for="seriesLoreText">原文 <span class="required">*</span></label>
+      <textarea id="seriesLoreText" class="series-theme-input" rows="8" placeholder="粘贴设定、小说片段或对白。只有被某一帧引用的条目才会进入该帧的提示词。" required></textarea>
+      <p class="field-hint">原文完整保存在本机浏览器，不会自动发送；只有在帧里引用它并生成时才会用到。</p>
+      <div class="settings-actions">
+        <button class="button secondary" type="button" id="seriesLoreCancel">取消</button>
+        <button class="button primary" type="submit">保存条目</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="seriesSplitDialog" class="settings-dialog series-split-dialog" aria-labelledby="seriesSplitTitle">
+    <header class="modal-heading">
+      <div><span class="section-label">Split Frames</span><h2 id="seriesSplitTitle">从档案拆分帧</h2></div>
+      <button class="close-button" id="seriesSplitClose" type="button" aria-label="关闭">×</button>
+    </header>
+    <div class="series-split-body">
+      <p class="panel-intro">模型只读取选中的档案原文，把它拆成若干帧的文字描述（主体、动作、场景、细节），不会生成图片。</p>
+
+      <section class="series-split-section">
+        <div class="series-split-section-head">
+          <span class="field-label">拆成几帧</span>
+          <span class="series-split-range">1–24</span>
+        </div>
+        <div class="series-split-count">
+          <input id="seriesSplitCount" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="6" aria-label="拆成几帧" autofocus>
+          <div class="series-split-presets" role="group" aria-label="常用帧数">
+            <button type="button" data-split-count="3">3</button>
+            <button type="button" data-split-count="6">6</button>
+            <button type="button" data-split-count="9">9</button>
+            <button type="button" data-split-count="12">12</button>
+          </div>
+        </div>
+        <p class="field-hint">帧数越多，每帧覆盖的原文越细。</p>
+      </section>
+
+      <section class="series-split-section">
+        <div class="series-split-section-head">
+          <span class="field-label">选择档案</span>
+          <div class="series-split-lore-tools">
+            <span id="seriesSplitSelectedCount">已选 0 条</span>
+            <button type="button" class="text-action" id="seriesSplitSelectAll">全选</button>
+          </div>
+        </div>
+        <div class="series-split-lore" id="seriesSplitLore"></div>
+        <p class="field-hint" id="seriesSplitEmpty" hidden>还没有档案条目。先到「档案」里添加原文，或者手动添加帧。</p>
+      </section>
+
+      <p class="series-split-summary" id="seriesSplitSummary"></p>
+    </div>
+    <footer class="series-split-footer">
+      <button class="button secondary" type="button" id="seriesSplitCancel">取消</button>
+      <button class="button primary" type="button" id="seriesSplitStart">开始拆分</button>
+    </footer>
+  </dialog>
+
+  <dialog id="seriesConfirmDialog" class="delete-history-dialog series-confirm-dialog" aria-labelledby="seriesConfirmTitle" aria-describedby="seriesConfirmText">
+    <h2 id="seriesConfirmTitle">确认操作</h2>
+    <p id="seriesConfirmText"></p>
+    <form method="dialog" class="delete-history-actions">
+      <button type="submit" value="cancel" id="seriesConfirmCancel" autofocus>取消</button>
+      <button type="submit" value="confirm" class="confirm-delete" id="seriesConfirmOk">确定</button>
+    </form>
+  </dialog>
+
 
   <section id="templatesPage" class="templates-page" data-page="styles" hidden aria-labelledby="templatesTitle">
     <div class="templates-shell">
@@ -222,6 +502,7 @@
         <div class="gallery-nav-tools">
           <button type="button" class="text-action" id="gallerySelectAll">全选</button>
           <button type="button" class="text-action" id="gallerySelectNone">清空</button>
+          <button type="button" class="text-action" id="galleryCompose" disabled>组成系列</button>
           <button type="button" class="gallery-launch" id="galleryLaunch" disabled>放映所选 <span aria-hidden="true">↗</span></button>
         </div>
       </div>
@@ -271,6 +552,7 @@
                 <span id="cinemaCounter" class="cinema-counter" aria-live="polite"></span>
               </div>
               <h2 id="cinemaTitle"></h2>
+              <p id="cinemaSeries" class="cinema-series" hidden></p>
               <p id="cinemaPrompt"></p>
             </div>
             <aside class="cinema-aside" aria-label="作品信息与操作">
@@ -454,7 +736,7 @@
 
   <dialog id="removeGalleryDialog" class="delete-history-dialog" aria-labelledby="removeGalleryTitle">
     <h2 id="removeGalleryTitle">移出画廊</h2>
-    <p>确定将这幅作品移出画廊吗？最近生成记录和已下载的文件不受影响。</p>
+    <p id="removeGalleryText">确定将这幅作品移出画廊吗？最近生成记录和已下载的文件不受影响。</p>
     <form method="dialog" class="delete-history-actions">
       <button type="submit" value="cancel" autofocus>取消</button>
       <button type="submit" value="remove" class="confirm-delete">确认移除</button>
@@ -465,7 +747,15 @@
   <script src="/style-templates.js"></script>
   <script src="/model-capabilities.js"></script>
   <script src="/generation-requirements.js"></script>
+  <script src="/reference-guidance.js"></script>
+  <script src="/series-engine.js"></script>
+  <script src="/series-store.js"></script>
+  <script src="/series-prompts.js"></script>
+  <script src="/series-templates.js"></script>
+  <script src="/series-llm.js"></script>
+  <script src="/series-drift.js"></script>
   <script src="/size-picker.js"></script>
   <script src="/app.js"></script>
+  <script src="/series.js"></script>
 </body>
 </html>

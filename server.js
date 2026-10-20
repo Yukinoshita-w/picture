@@ -3,13 +3,27 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { buildOptimizationInstructions } = require('./prompt-optimizer');
+const { buildSeriesInstructions, buildRepairMessages } = require('./public/series-prompts');
 const generationRequirements = require('./public/generation-requirements');
+const { formatReferenceGuidance, REFERENCE_PURPOSES } = require('./public/reference-guidance');
 const { resolve: resolveCapabilities, supportsSize, isCustomSize } = require('./public/model-capabilities');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
+// Reported by /api/health so the page can detect a server process started before an update.
+const SERVER_BUILD = 'series-1';
 const MAX_RESPONSE = 80 * 1024 * 1024;
 const MAX_REFERENCE_SIZE = 10 * 1024 * 1024;
 const MAX_REFERENCE_TOTAL = 20 * 1024 * 1024;
+// Series requests carry one long text chunk or one base64 image; both are far larger than
+// the default 64 KB control-plane limit but must stay bounded.
+const BODY_LIMITS = {
+  '/api/generate': 30 * 1024 * 1024,
+  '/api/series/extract': 256 * 1024,
+  '/api/series/reduce': 512 * 1024,
+  '/api/series/describe': 16 * 1024 * 1024,
+  '/api/series/outline': 512 * 1024,
+  '/api/series/shot': 64 * 1024
+};
 const MIME_TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
 class ApiError extends Error {
   constructor(message, status = 400, diagnostic = null) { super(message); this.status = status; this.diagnostic = diagnostic; }
@@ -60,7 +74,10 @@ function generationEndpoint(value) {
 }
 function chatEndpoint(value) {
   const url = parseHttpUrl(value);
-  const pathname = url.pathname.replace(/\/+$/, '');
+  let pathname = url.pathname.replace(/\/+$/, '');
+  // The create page is configured with an image endpoint; the same provider usually exposes
+  // chat completions next to it, so strip the image suffix before appending the chat path.
+  if (/\/images\/(generations|edits)$/.test(pathname)) pathname = pathname.replace(/\/images\/(generations|edits)$/, '');
   url.pathname = pathname.endsWith('/chat/completions') ? pathname : pathname + '/chat/completions';
   return url;
 }
@@ -169,10 +186,10 @@ function referenceImages(value) {
     return { buffer, mime: item.mime, name: 'reference-' + (index + 1) + '.' + extension, guidance };
   });
 }
-const REFERENCE_PURPOSES = { person: '人物', composition: '构图', style: '风格', product: '产品外观', custom: '自定义' };
+const REFERENCE_PURPOSE_LABELS = REFERENCE_PURPOSES;
 function referenceGuidance(item, index) {
   const purpose = item.purpose === undefined ? '' : String(item.purpose);
-  if (purpose && !Object.hasOwn(REFERENCE_PURPOSES, purpose)) throw new ApiError('参考图 ' + (index + 1) + ' 的用途无效');
+  if (purpose && !Object.hasOwn(REFERENCE_PURPOSE_LABELS, purpose)) throw new ApiError('参考图 ' + (index + 1) + ' 的用途无效');
   const customPurpose = String(item.customPurpose || '').trim();
   if (customPurpose.length > 80 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(customPurpose)) throw new ApiError('参考图 ' + (index + 1) + ' 的自定义用途无效');
   if (purpose === 'custom' && !customPurpose) throw new ApiError('请填写参考图 ' + (index + 1) + ' 的自定义用途');
@@ -180,19 +197,7 @@ function referenceGuidance(item, index) {
   const change = String(item.change || '').trim();
   if (preserve.length > 500 || change.length > 500 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(preserve + change)) throw new ApiError('参考图 ' + (index + 1) + ' 的说明过长或包含无效字符');
   if (!purpose && !customPurpose && !preserve && !change) return null;
-  return { purpose: purpose === 'custom' ? '' : (REFERENCE_PURPOSES[purpose] || ''), customPurpose, preserve, change };
-}
-function formatReferenceGuidance(guidance) {
-  if (!Array.isArray(guidance)) return '';
-  const lines = guidance.map((item, index) => {
-    if (!item) return '';
-    const purpose = item.purpose || item.customPurpose || '未指定';
-    const parts = ['参考图' + (index + 1) + '（用途：' + purpose + '）'];
-    if (item.preserve) parts.push('需要保留：' + item.preserve);
-    if (item.change) parts.push('需要修改：' + item.change);
-    return parts.join('，');
-  }).filter(Boolean);
-  return lines.length ? '\n\n参考图使用说明（按编号对应上传图片）：\n' + lines.join('\n') : '';
+  return { purpose: purpose === 'custom' ? '' : (REFERENCE_PURPOSE_LABELS[purpose] || ''), customPurpose, preserve, change };
 }
 function normalizeReferenceGuidance(value, count) {
   if (value === undefined) return [];
@@ -292,8 +297,152 @@ async function optimizePrompt(body, signal) {
   if (optimized.length > 10000) throw new ApiError('优化结果超过 10000 字符，原提示词已保留，请缩短描述后重试', 502);
   return { prompt: optimized };
 }
-async function testConnection(body, optimizer = false) {
-  const { endpoint, apiKey, model } = getConfig(body, optimizer ? chatEndpoint : generationEndpoint);
+// Series endpoints are stateless forwarders: chunking, caching, retries and progress all
+// live in the browser, so the server never holds intermediate state.
+function chatContent(data) {
+  const choice = data?.choices?.[0];
+  const content = choice?.message?.content;
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.filter(part => part?.type === 'text' && typeof part.text === 'string').map(part => part.text).join('')
+      : '';
+  return { text: text.trim(), truncated: choice?.finish_reason === 'length', refused: Boolean(choice?.message?.refusal) || choice?.finish_reason === 'content_filter' };
+}
+
+// Models often wrap JSON in a code fence or add a sentence before it. Extracting the first
+// balanced object is more reliable than asking the model to behave.
+function extractJsonObject(text) {
+  const value = String(text || '').trim();
+  if (!value) return null;
+  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1].trim() : value;
+  const start = candidate.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < candidate.length; index++) {
+    const char = candidate[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; continue; }
+    if (char === '{') depth++;
+    else if (char === '}') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(candidate.slice(start, index + 1)); }
+        catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+async function seriesChat(body, signal, buildMessages, { maxInput = 30000 } = {}) {
+  const { endpoint, apiKey, model } = getConfig(body, chatEndpoint);
+  // A repair round resends the model's own broken output, so it must not be validated as
+  // fresh user input.
+  const repair = body.repair === true;
+  const input = String(body.input || '');
+  if (!repair) {
+    if (!input.trim()) throw new ApiError('请求内容不能为空');
+    if (input.length > maxInput) throw new ApiError('单次请求内容过长，最多 ' + maxInput + ' 个字符；长文会自动分块');
+  }
+  const messages = repair
+    ? buildRepairMessages({ original: input, problem: body.problem })
+    : buildMessages(body);
+  if (!messages.length) throw new ApiError('请求参数无效');
+  const data = await upstreamJson(endpoint, apiKey, { model, stream: false, messages }, signal);
+  const { text, truncated, refused } = chatContent(data);
+  if (refused) throw new ApiError('文本模型未返回可用内容（可能触发了内容过滤）', 502);
+  if (!text) throw new ApiError('文本接口未返回有效内容，请确认服务兼容 Chat Completions 格式', 502);
+  if (truncated) throw new ApiError('模型输出被截断，请减少单次输入长度后重试', 502);
+  return { text, model, usage: data.usage || null };
+}
+
+async function seriesExtract(body, signal) {
+  const chunkIndex = Number(body.chunkIndex ?? 0);
+  const chunkTotal = Number(body.chunkTotal ?? 1);
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) throw new ApiError('分块序号无效');
+  if (!Number.isInteger(chunkTotal) || chunkTotal < 1 || chunkTotal > 200) throw new ApiError('分块总数无效');
+  const headingPath = Array.isArray(body.headingPath) ? body.headingPath.map(item => String(item).slice(0, 120)).slice(0, 6) : [];
+  const result = await seriesChat(body, signal, value => ([
+    { role: 'system', content: buildSeriesInstructions('extract', { chunkIndex, chunkTotal, headingPath }) },
+    { role: 'user', content: String(value.input) }
+  ]));
+  return { ...result, data: extractJsonObject(result.text) };
+}
+
+async function seriesReduce(body, signal) {
+  const result = await seriesChat(body, signal, value => ([
+    { role: 'system', content: buildSeriesInstructions('reduce', { hasGallery: value.hasGallery === true }) },
+    { role: 'user', content: String(value.input) }
+  ]), { maxInput: 60000 });
+  return { ...result, data: extractJsonObject(result.text) };
+}
+
+async function seriesDescribe(body, signal) {
+  const { endpoint, apiKey, model } = getConfig(body, chatEndpoint);
+  const image = String(body.image || '');
+  const match = image.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/\r\n]+={0,2})$/);
+  if (!match) throw new ApiError('请提供 PNG、JPEG 或 WebP 图片');
+  const buffer = Buffer.from(match[2].replace(/[\r\n]/g, ''), 'base64');
+  if (!buffer.length || buffer.length > MAX_REFERENCE_SIZE) throw new ApiError('图片大小无效或超过 10 MB');
+  const role = ['character', 'style', 'scene', 'prop', 'other'].includes(body.role) ? body.role : 'other';
+  const context = String(body.context || '').slice(0, 2000);
+  const data = await upstreamJson(endpoint, apiKey, {
+    model,
+    stream: false,
+    messages: [
+      { role: 'system', content: buildSeriesInstructions('describe', { role }) },
+      { role: 'user', content: [
+        { type: 'text', text: (context ? '系列风格摘要：' + context + '\n\n' : '') + '请分析这张参考图。' },
+        { type: 'image_url', image_url: { url: 'data:' + match[1] + ';base64,' + match[2].replace(/[\r\n]/g, '') } }
+      ] }
+    ]
+  }, signal);
+  const { text, truncated, refused } = chatContent(data);
+  if (refused) throw new ApiError('视觉模型未返回可用内容（可能触发了内容过滤）', 502);
+  if (!text) throw new ApiError('视觉接口未返回有效内容，请确认所填模型支持图片输入', 502);
+  if (truncated) throw new ApiError('视觉模型输出被截断，请重试', 502);
+  return { text, model, usage: data.usage || null, data: extractJsonObject(text) };
+}
+
+async function seriesOutline(body, signal) {
+  const count = Number(body.count ?? 10);
+  if (!Number.isInteger(count) || count < 1 || count > 24) throw new ApiError('帧数量必须为 1–24');
+  const axes = Array.isArray(body.axes) ? body.axes.slice(0, 6).map(axis => ({
+    id: String(axis?.id || '').slice(0, 40),
+    label: String(axis?.label || '').slice(0, 40),
+    values: Array.isArray(axis?.values) ? axis.values.slice(0, 24).map(item => String(item).slice(0, 60)) : []
+  })) : [];
+  const loreTitles = Array.isArray(body.loreTitles)
+    ? body.loreTitles.slice(0, 40).map(item => String(item).slice(0, 60))
+    : [];
+  const result = await seriesChat(body, signal, value => ([
+    { role: 'system', content: buildSeriesInstructions('outline', { count, axes, hasLore: value.hasLore === true, loreTitles }) },
+    { role: 'user', content: String(value.input) }
+  ]), { maxInput: 60000 });
+  return { ...result, data: extractJsonObject(result.text) };
+}
+
+async function seriesShot(body, signal) {
+  const axisValues = body.axisValues && typeof body.axisValues === 'object' && !Array.isArray(body.axisValues)
+    ? Object.fromEntries(Object.entries(body.axisValues).slice(0, 8).map(([key, value]) => [String(key).slice(0, 40), String(value).slice(0, 60)]))
+    : {};
+  const result = await seriesChat(body, signal, value => ([
+    { role: 'system', content: buildSeriesInstructions('shot', { axisValues }) },
+    { role: 'user', content: String(value.input) }
+  ]), { maxInput: 8000 });
+  return { ...result, data: extractJsonObject(result.text) };
+}
+
+async function testConnection(body, optimizer = false) {  const { endpoint, apiKey, model } = getConfig(body, optimizer ? chatEndpoint : generationEndpoint);
   const modelsUrl = new URL(endpoint);
   modelsUrl.pathname = endpoint.pathname.replace(optimizer ? /\/chat\/completions$/ : /\/images\/generations$/, '/models');
   const data = await upstreamJson(modelsUrl, apiKey);
@@ -345,14 +494,19 @@ function createServer({ requestTimeoutMs = 300000 } = {}) {
       if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) throw new ApiError('仅支持本机访问', 403);
       const url = new URL(req.url, 'http://' + host);
       if (req.headers.origin && req.headers.origin !== 'http://' + host) throw new ApiError('不允许跨站请求', 403);
-      if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true });
+      if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, build: SERVER_BUILD, series: true });
       if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
         if (!(req.headers['content-type'] || '').startsWith('application/json')) throw new ApiError('请使用 application/json', 415);
-        const body = await readBody(req, url.pathname === '/api/generate' ? 30 * 1024 * 1024 : 64 * 1024);
+        const body = await readBody(req, BODY_LIMITS[url.pathname] || 64 * 1024);
         timeout = setTimeout(() => requestController.abort(new DOMException('接口响应超时', 'TimeoutError')), requestTimeoutMs);
         requestController.signal.throwIfAborted();
         if (url.pathname === '/api/generate') return sendJson(res, 200, await generateImage(body, requestController.signal));
         if (url.pathname === '/api/optimize') return sendJson(res, 200, await optimizePrompt(body, requestController.signal));
+        if (url.pathname === '/api/series/extract') return sendJson(res, 200, await seriesExtract(body, requestController.signal));
+        if (url.pathname === '/api/series/reduce') return sendJson(res, 200, await seriesReduce(body, requestController.signal));
+        if (url.pathname === '/api/series/describe') return sendJson(res, 200, await seriesDescribe(body, requestController.signal));
+        if (url.pathname === '/api/series/outline') return sendJson(res, 200, await seriesOutline(body, requestController.signal));
+        if (url.pathname === '/api/series/shot') return sendJson(res, 200, await seriesShot(body, requestController.signal));
         if (url.pathname === '/api/optimizer/test') return sendJson(res, 200, await testConnection(body, true));
         if (url.pathname === '/api/test') return sendJson(res, 200, await testConnection(body));
         if (url.pathname === '/api/download') return await downloadImage(body, res);
@@ -381,4 +535,4 @@ if (require.main === module) {
   });
   server.listen(port, '127.0.0.1', () => console.log('Prompt Studio 已启动：http://localhost:' + port + '\n按 Ctrl+C 停止服务'));
 }
-module.exports = { createServer, generationEndpoint };
+module.exports = { createServer, generationEndpoint, chatEndpoint };

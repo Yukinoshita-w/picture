@@ -603,6 +603,19 @@ function createReuse(prompt) {
   button.addEventListener('click', () => reusePrompt(prompt));
   return button;
 }
+// Promotes a single finished image into a new series, where it becomes the first frame and
+// the default style anchor.
+function createSeriesAnchor(src, prompt) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'download-link';
+  button.textContent = '设为系列锚点';
+  button.addEventListener('click', () => {
+    if (!window.SeriesPage?.composeFromGallery) { setStatus('系列模块尚未加载，请刷新页面后重试。', 'error'); return; }
+    window.SeriesPage.composeFromGallery([{ src, prompt, created: Date.now() }], { title: stageTitleFor(prompt) });
+  });
+  return button;
+}
 function stageTitleFor(prompt) {
   const text = String(prompt || '').replace(/\s+/g, ' ').trim();
   if (!text) return '开始你的创作';
@@ -655,7 +668,7 @@ function renderResults(images, prompt) {
     label.textContent = 'Plate ' + String(index + 1).padStart(2, '0');
     const promptActions = document.createElement('div');
     promptActions.className = 'result-prompt-actions';
-    promptActions.append(createReuse(prompt), artGallery.submitButton({ id: image.id, src, prompt, created: image.created }));
+    promptActions.append(createReuse(prompt), createSeriesAnchor(src, prompt), artGallery.submitButton({ id: image.id, src, prompt, created: image.created }));
     actions.append(label, promptActions, createDownload(src));
     card.append(imageEl, actions);
     if (image.revised_prompt) {
@@ -748,7 +761,7 @@ async function showHistoryItem(item, card) {
   frame.className = 'stage-plate';
   const actions = document.createElement('div');
   actions.className = 'stage-plate-actions';
-  actions.append(createReuse(item.prompt), artGallery.submitButton(item), createDownload(src));
+  actions.append(createReuse(item.prompt), createSeriesAnchor(src, item.prompt), artGallery.submitButton(item), createDownload(src));
   frame.append(image, actions);
   const grid = document.createElement('div');
   grid.className = 'result-grid';
@@ -1155,6 +1168,8 @@ function renderRoute() {
   document.title = routeTitles[route];
   artGallery.setVisible(route === 'gallery');
   if (route === 'styles') { renderTemplateFilters(); renderTemplates(); }
+  // The series workspace loads its own IndexedDB data on first entry.
+  if (route === 'series') window.SeriesPage?.activate();
   window.scrollTo(0, 0);
 }
 function navigateTo(route) {
@@ -1333,7 +1348,17 @@ document.querySelectorAll('[data-starter]').forEach(button => button.addEventLis
   updateCounter();
   promptInput.focus();
 }));
-const artGallery = createArtGallery({ safeImageSource, preview: openPreview, download: downloadImage, reuse: reusePrompt, notify: setStatus });
+const artGallery = createArtGallery({
+  safeImageSource,
+  preview: openPreview,
+  download: downloadImage,
+  reuse: reusePrompt,
+  notify: setStatus,
+  composeSeries: items => window.SeriesPage?.composeFromGallery(items)
+});
+// The series workspace copies finished frames into this gallery; expose the same instance
+// so both pages agree on what has already been collected.
+window.ArtGallery = artGallery;
 artGallery.init();
 renderRoute();
 renderHistory();

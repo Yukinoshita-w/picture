@@ -19,6 +19,24 @@
   .composer-panel { padding-left: 22px; padding-right: 22px; }
 
   .result-grid { grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); }
+
+  /* Series: two columns, inspector becomes a right-hand drawer instead of a grid column. */
+  .series-layout,
+  .series-layout.has-inspector {
+    grid-template-columns: 190px minmax(0, 1fr);
+  }
+  .series-inspector {
+    position: fixed;
+    top: var(--header-h);
+    right: 0;
+    bottom: 0;
+    width: min(380px, 92vw);
+    max-height: none;
+    z-index: 30;
+    box-shadow: var(--lift);
+  }
+  .series-canon-body { grid-template-columns: minmax(0, 1fr); }
+  .series-canon-preview { position: static; }
 }
 
 /* --- Phone: header wraps, controls stack, composer goes full width --- */
@@ -170,6 +188,60 @@
   .reference-item { flex: 0 0 260px; }
   .history-card { grid-template-columns: 18px 42px minmax(0, 1fr); }
   .history-card > img { width: 42px; height: 42px; }
+
+  /* Series: single column, the series list becomes a horizontal strip. */
+  .series-masthead { gap: var(--s-2); }
+  .series-layout,
+  .series-layout.has-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .series-sidebar {
+    position: static;
+    max-height: none;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .series-list {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: var(--s-2);
+    padding-bottom: 4px;
+  }
+  .series-list-item { flex: 0 0 auto; min-width: 150px; }
+  .series-sidebar-foot { flex-direction: row; flex-wrap: wrap; gap: var(--s-3); }
+  .series-title-row { gap: var(--s-2); }
+  .series-name-input { min-width: 0; flex-basis: 100%; }
+  .series-tabs { overflow-x: auto; scrollbar-width: none; }
+  .series-tabs::-webkit-scrollbar { display: none; }
+  .series-tabs button { white-space: nowrap; padding: 8px 10px; }
+  .series-outline-toolbar,
+  .series-matrix-toolbar,
+  .series-gallery-toolbar,
+  .series-canon-toolbar,
+  .series-lore-toolbar { flex-direction: column; align-items: stretch; gap: var(--s-2); }
+  .series-outline-actions,
+  .series-matrix-actions,
+  .series-gallery-actions,
+  .series-canon-actions,
+  .series-lore-actions { flex-wrap: wrap; }
+  .series-shot-card { grid-template-columns: 24px 32px 56px minmax(0, 1fr); row-gap: var(--s-2); }
+  .series-shot-selectbar { flex-wrap: wrap; gap: var(--s-2); }
+  .series-batch-selected { margin-left: 0; width: 100%; }
+  .series-split-body { padding: var(--s-4); gap: var(--s-4); }
+  .series-split-footer { padding: var(--s-3) var(--s-4); }
+  .series-split-count { flex-wrap: wrap; }
+  .series-guide-step { grid-template-columns: 36px minmax(0, 1fr); padding: var(--s-3); }
+  .series-guide-index { font-size: 20px; }
+  .series-shot-thumb { width: 56px; height: 44px; }
+  .series-shot-state { grid-column: 1 / -1; justify-self: start; }
+  .series-canon-field { grid-template-columns: 1fr; gap: 2px; }
+  .series-term-row,
+  .series-axis-row { grid-template-columns: 80px minmax(0, 1fr) 22px; }
+  .series-inspector { width: 100vw; }
+  .series-batchbar { flex-direction: column; align-items: stretch; gap: var(--s-2); }
+  .series-batch-info { flex-wrap: wrap; }
+  .series-batch-actions { flex-wrap: wrap; }
+  .series-ref-slots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* --- Very small phones --- */
