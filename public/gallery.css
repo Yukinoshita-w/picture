@@ -313,8 +313,8 @@
 
 /* ---------- series sets ----------
    A series can hold dozens of frames. Instead of letting those tiles flood the
-   chronological wall, each series is one album on a shelf above it. The album is
-   collapsed by default and only expands into a contact sheet on demand. */
+   chronological wall, each series is one row on a shelf above it. The row is closed
+   by default and unrolls its contact sheet in place, inside its own block. */
 .gallery-series {
   padding-bottom: var(--s-7);
   margin-bottom: var(--s-2);
@@ -350,110 +350,173 @@
   font-variant-numeric: tabular-nums;
 }
 
-.gallery-series-grid {
+/* A series is one ledger row, not a card that jumps to another row when it opens.
+   The head stays exactly where it is; only the row's own body grows downward. */
+.gallery-set-shelf {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: var(--s-4);
-  align-items: start;
+  gap: 0;
+  border-top: 1px solid var(--line);
 }
 
-.gallery-album {
-  display: grid;
-  grid-template-columns: 128px minmax(0, 1fr);
-  gap: var(--s-4);
-  padding: var(--s-3);
-  border: 1px solid var(--line);
-  background: var(--paper-raised);
-  box-shadow: var(--lift-soft);
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+/* One series = one row. The row head never moves; the sheet unrolls underneath it
+   inside the same block, so nothing is inserted somewhere else on the page. */
+.gallery-set {
+  border-bottom: 1px solid var(--line);
+  transition: background 0.3s ease;
 }
-.gallery-album:hover { border-color: var(--line-2); }
-.gallery-album.is-open {
-  grid-column: 1 / -1;
-  border-color: var(--line-2);
-  box-shadow: var(--lift);
+.gallery-set.is-open {
+  background: color-mix(in srgb, var(--paper-2) 55%, transparent);
 }
 
-/* Stacked-paper edge: the cover reads as one book in a pile, not a lone thumbnail. */
-.gallery-album-cover {
+.gallery-set-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.gallery-set-toggle {
+  flex: 1;
+  display: grid;
+  grid-template-columns: auto 104px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+  /* Right padding keeps the frame count clear of the "整组" checkbox beside it. */
+  padding: var(--s-3) var(--s-5) var(--s-3) 0;
+  text-align: left;
+  color: var(--ink);
+  transition: color 0.2s ease;
+}
+.gallery-set-toggle:hover { color: var(--accent); }
+.gallery-set-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.gallery-set-plate {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--tracking-label);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  transition: color 0.2s ease;
+}
+.gallery-set.is-open .gallery-set-plate { color: var(--accent); }
+
+.gallery-set-cover {
   position: relative;
-  aspect-ratio: 4 / 5;
-  padding: 6px;
+  display: block;
+  width: 104px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
   border: 1px solid var(--line);
   background: var(--paper-2);
-  box-shadow: 4px 4px 0 0 var(--paper-2), 5px 5px 0 0 var(--line),
-              9px 9px 0 0 var(--paper-2), 10px 10px 0 0 var(--line);
-  cursor: zoom-in;
 }
-.gallery-album-cover:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.gallery-album-cover img {
+.gallery-set-cover-image {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  transform: scale(1.01);
+  transition: transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
-.gallery-album-count {
+.gallery-set-toggle:hover .gallery-set-cover-image { transform: scale(1.06); }
+.gallery-set-cover-veil {
   position: absolute;
-  right: -10px;
-  bottom: -12px;
-  min-width: 34px;
-  height: 34px;
-  padding: 0 7px;
-  display: grid;
-  place-items: center;
-  background: var(--ink);
-  color: var(--paper);
-  font-family: var(--font-mono);
-  font-size: var(--fs-label);
-  letter-spacing: 0.04em;
-  font-variant-numeric: tabular-nums;
+  inset: 0;
+  background: linear-gradient(0deg, rgba(12, 11, 8, 0.34), rgba(12, 11, 8, 0) 62%);
+  opacity: 0.9;
+  transition: opacity 0.3s ease;
 }
+.gallery-set.is-open .gallery-set-cover-veil { opacity: 0.45; }
 
-.gallery-album-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  padding: var(--s-1) 0;
-}
-.gallery-album-info h3 {
+.gallery-set-text { display: grid; gap: 3px; min-width: 0; }
+.gallery-set-title {
   font-family: var(--font-display);
   font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: 0.01em;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  transition: font-size 0.3s ease;
 }
-.gallery-album-info > p {
-  font-size: var(--fs-xs);
-  line-height: 1.6;
+.gallery-set.is-open .gallery-set-title { font-size: var(--fs-h2); }
+.gallery-set-meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: 0.06em;
   color: var(--ink-3);
 }
-.gallery-album-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  flex-wrap: wrap;
-  margin-top: auto;
-  padding-top: var(--s-3);
+
+.gallery-set-tail { display: flex; align-items: center; gap: var(--s-3); }
+.gallery-set-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.gallery-album-choice {
+.gallery-set-caret {
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid var(--ink-3);
+  border-bottom: 1px solid var(--ink-3);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1), border-color 0.2s ease;
+}
+.gallery-set-toggle:hover .gallery-set-caret { border-color: var(--accent); }
+.gallery-set.is-open .gallery-set-caret { transform: translateY(2px) rotate(225deg); border-color: var(--accent); }
+
+.gallery-set-choice {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: var(--fs-label);
   letter-spacing: 0.05em;
   color: var(--ink-3);
   cursor: pointer;
 }
-.gallery-album-choice input {
+.gallery-set-choice input {
   width: 13px;
   height: 13px;
   margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
 }
-.gallery-album-toggle {
+
+/* The unroll: height is animated from JS, so the easing and the fade live here. */
+.gallery-set-body {
+  overflow: hidden;
+}
+.gallery-set-body.is-unfolding {
+  transition: height 0.4s cubic-bezier(0.22, 0.72, 0.2, 1);
+}
+.gallery-set-inner {
+  padding: var(--s-2) 0 var(--s-5);
+  border-top: 1px solid var(--line);
+}
+/* is-unrolling only exists while a row is genuinely being opened by a click, so a row
+   restored after a re-render simply sits there instead of replaying its entrance. */
+.gallery-set.is-unrolling .gallery-set-inner {
+  animation: set-reveal 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes set-reveal {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.gallery-set-toolbar {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  padding: var(--s-3) 0 var(--s-3);
+}
+.gallery-set-toolbar p {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.gallery-set-close {
   margin-left: auto;
   padding: 0 0 1px;
   font-size: var(--fs-xs);
@@ -461,16 +524,49 @@
   border-bottom: 1px solid var(--line-2);
   transition: color 0.15s ease, border-color 0.15s ease;
 }
-.gallery-album-toggle:hover { color: var(--accent); border-color: var(--accent); }
+.gallery-set-close:hover { color: var(--accent); border-color: var(--accent); }
 
-.gallery-album-sheet {
-  grid-column: 1 / -1;
+/* Contact sheet: proof prints fill the row instead of leaving a dead margin on the right. */
+.gallery-sheet {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 176px));
-  gap: var(--s-3);
-  margin-top: var(--s-2);
-  padding-top: var(--s-4);
-  border-top: 1px solid var(--line);
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--s-3) var(--s-2);
+}
+/* A short series should not blow each print up to column width, so its tiles are capped
+   and the row is packed from the left. */
+.gallery-sheet.is-sparse {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 260px));
+  justify-content: start;
+}
+.gallery-sheet.is-sparse .gallery-frame { max-width: none; }
+.gallery-sheet .gallery-frame { gap: 5px; }
+.gallery-sheet .gallery-frame-open {
+  aspect-ratio: 4 / 3;
+  padding: 4px;
+  border: 1px solid var(--line);
+  background: var(--paper-3);
+}
+.gallery-sheet .gallery-frame-open:hover { border-color: var(--accent); }
+.gallery-sheet .gallery-frame-choice { top: 8px; left: 8px; width: 19px; height: 19px; border-color: var(--line-2); background: color-mix(in srgb, var(--paper) 82%, transparent); }
+.gallery-sheet .gallery-frame-choice input { width: 11px; height: 11px; accent-color: var(--accent); }
+.gallery-sheet .gallery-frame-caption { gap: 2px 6px; }
+
+/* Frames settle in one after another as the sheet unrolls. The stagger itself is set
+   inline per tile by the gallery, so long series do not need a growing rule list. */
+.gallery-set.is-unrolling .gallery-frame {
+  animation: frame-rise 0.36s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes frame-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gallery-set.is-unrolling .gallery-set-inner,
+  .gallery-set.is-unrolling .gallery-frame { animation: none; }
+  .gallery-set-cover-image { transition: none; }
+  .gallery-set-body.is-unfolding { transition: none; }
+  .gallery-set-caret { transition: none; }
 }
 
 .gallery-frame {
@@ -536,8 +632,14 @@
   font-size: 10.5px;
   color: var(--ink-3);
   padding: 0 0 1px;
+  transition: opacity 0.15s ease, color 0.15s ease;
 }
 .gallery-frame-remove:hover { color: var(--accent); }
+@media (hover: hover) {
+  .gallery-sheet .gallery-frame-remove { opacity: 0; }
+  .gallery-sheet .gallery-frame:hover .gallery-frame-remove,
+  .gallery-sheet .gallery-frame:focus-within .gallery-frame-remove { opacity: 1; }
+}
 
 .cinema-series {
   margin-top: var(--s-1);
@@ -765,8 +867,7 @@
   .gallery-day-heading { border-left: 0; padding-left: 0; }
   .gallery-day-heading::before { display: none; }
   .gallery-wall { grid-template-columns: 1fr; }
-  .gallery-series-grid { grid-template-columns: 1fr; }
-  .gallery-album-sheet { grid-template-columns: repeat(auto-fill, minmax(120px, 158px)); }
+  .gallery-sheet { grid-template-columns: repeat(auto-fill, 132px); }
 }
 
 @media (max-width: 720px) {
@@ -775,9 +876,20 @@
   .gallery-view-switch { width: 100%; }
   .gallery-view-switch button { flex: 1; }
   .gallery-nav-tools { margin-left: 0; width: 100%; justify-content: space-between; }
-  .gallery-album { grid-template-columns: 96px minmax(0, 1fr); gap: var(--s-3); }
-  .gallery-album-cover { aspect-ratio: 1 / 1; }
-  .gallery-album-sheet { grid-template-columns: repeat(auto-fill, minmax(104px, 136px)); gap: var(--s-2); }
+  .gallery-set-toggle {
+    grid-template-columns: 74px minmax(0, 1fr) auto;
+    gap: var(--s-3);
+    padding: var(--s-3) var(--s-1) var(--s-3) 0;
+  }
+  /* The set plate is the first thing to go on a phone; the row keeps its title. */
+  .gallery-set-plate { display: none; }
+  .gallery-set-cover { width: 74px; }
+  .gallery-set.is-open .gallery-set-title { font-size: var(--fs-title); }
+  .gallery-set-choice-text { display: none; }
+  .gallery-set-inner { padding-bottom: var(--s-4); }
+  .gallery-sheet,
+  .gallery-sheet.is-sparse { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--s-2); }
+  .gallery-sheet.is-sparse .gallery-frame { max-width: none; }
   .cinema-stage { min-height: 260px; gap: var(--s-2); }
   .cinema-main-frame { max-width: 100%; }
   .cinema-side { width: 44px; height: 44px; }

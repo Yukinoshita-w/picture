@@ -271,53 +271,165 @@
       return figure;
     }
 
-    function albumCard(group) {
-      const card = document.createElement('article'); card.className = 'gallery-album'; card.dataset.seriesId = group.id;
-      const open = expandedSeries.has(group.id);
-      card.classList.toggle('is-open', open);
-
-      const cover = document.createElement('div'); cover.className = 'gallery-album-cover';
-      cover.tabIndex = 0;
-      cover.setAttribute('role', 'button');
-      cover.setAttribute('aria-label', '欣赏系列封面：' + (group.title || '未命名系列'));
-      const openCover = () => preview(group.cover.src, group.cover.prompt);
-      cover.addEventListener('click', openCover);
-      cover.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openCover(); } });
-      cover.append(artworkImage(group.cover, 'gallery-album-cover-main'));
-      const count = document.createElement('span'); count.className = 'gallery-album-count';
-      count.textContent = String(group.items.length).padStart(2, '0');
-      cover.append(count);
-
-      const info = document.createElement('div'); info.className = 'gallery-album-info';
-      const eyebrow = document.createElement('span'); eyebrow.className = 'section-label'; eyebrow.textContent = 'Series Set';
-      const name = document.createElement('h3'); name.textContent = group.title || '未命名系列';
-      const meta = document.createElement('p'); meta.textContent = group.items.length + ' 帧 · ' + date(group.latest) + ' 更新';
-      const actions = document.createElement('div'); actions.className = 'gallery-album-actions';
-      const choiceLabel = document.createElement('label'); choiceLabel.className = 'gallery-album-choice';
-      const choice = document.createElement('input'); choice.type = 'checkbox'; choice.dataset.seriesChoice = group.id;
-      choice.setAttribute('aria-label', '整组加入放映：' + seriesName(group.cover));
-      choice.addEventListener('change', () => {
-        changeSelection(new Map(group.items.map(item => [item.id, choice.checked])));
+    // One checkbox per album row; selectionUI() keeps it in sync with the frames.
+    function seriesChoice(group) {
+      const label = document.createElement('label'); label.className = 'gallery-set-choice';
+      const box = document.createElement('input'); box.type = 'checkbox'; box.dataset.seriesChoice = group.id;
+      box.setAttribute('aria-label', '整组加入放映：' + (group.title || '未命名系列'));
+      box.addEventListener('change', () => {
+        changeSelection(new Map(group.items.map(item => [item.id, box.checked])));
       });
-      choiceLabel.append(choice, '整组加入放映');
+      const word = document.createElement('span'); word.className = 'gallery-set-choice-text'; word.textContent = '整组';
+      label.append(box, word);
+      return label;
+    }
 
-      const sheet = document.createElement('div'); sheet.className = 'gallery-album-sheet'; sheet.hidden = !open;
-      sheet.append(...group.items.map(frameTile));
+    // A series is one row: cover, name and count always stay put. The sheet lives in the
+    // row's own body and is built the first time it opens, so unfolding grows this block
+    // downward instead of re-rendering the shelf or adding a second card elsewhere.
+    function albumRow(group, index) {
+      const card = document.createElement('article');
+      card.className = 'gallery-set';
+      card.dataset.seriesId = group.id;
+      card._group = group;
+      card._index = index;
 
-      const toggle = makeButton('', () => {
-        const next = !expandedSeries.has(group.id);
-        if (next) expandedSeries.add(group.id); else expandedSeries.delete(group.id);
-        card.classList.toggle('is-open', next);
-        sheet.hidden = !next;
-        toggle.textContent = next ? '收起' : '展开 ' + group.items.length + ' 帧';
-        toggle.setAttribute('aria-expanded', String(next));
-      }, 'gallery-album-toggle');
-      toggle.setAttribute('aria-expanded', String(open));
-      toggle.textContent = open ? '收起' : '展开 ' + group.items.length + ' 帧';
-      actions.append(choiceLabel, toggle);
-      info.append(eyebrow, name, meta, actions);
-      card.append(cover, info, sheet);
+      const sheetId = 'series-sheet-' + String(group.id).replace(/[^A-Za-z0-9_-]/g, '');
+      const head = document.createElement('div'); head.className = 'gallery-set-head';
+
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'gallery-set-toggle';
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.setAttribute('aria-controls', sheetId);
+
+      const plate = document.createElement('span'); plate.className = 'gallery-set-plate';
+      plate.textContent = 'SET ' + String(index + 1).padStart(2, '0');
+
+      const cover = document.createElement('span'); cover.className = 'gallery-set-cover';
+      const image = artworkImage(group.cover, 'gallery-set-cover-image');
+      image.alt = '';
+      const veil = document.createElement('span'); veil.className = 'gallery-set-cover-veil'; veil.setAttribute('aria-hidden', 'true');
+      cover.append(image, veil);
+
+      const text = document.createElement('span'); text.className = 'gallery-set-text';
+      const name = document.createElement('span'); name.className = 'gallery-set-title';
+      name.textContent = group.title || '未命名系列';
+      const meta = document.createElement('span'); meta.className = 'gallery-set-meta';
+      meta.textContent = date(group.latest) + ' 更新';
+      text.append(name, meta);
+
+      const tail = document.createElement('span'); tail.className = 'gallery-set-tail';
+      const count = document.createElement('span'); count.className = 'gallery-set-count';
+      count.textContent = String(group.items.length).padStart(2, '0') + ' 帧';
+      const caret = document.createElement('span'); caret.className = 'gallery-set-caret'; caret.setAttribute('aria-hidden', 'true');
+      tail.append(count, caret);
+
+      toggle.append(plate, cover, text, tail);
+      toggle.addEventListener('click', () => unfold(card, !card.classList.contains('is-open'), true));
+      toggle.setAttribute('aria-label', '展开系列集：' + (group.title || '未命名系列'));
+      head.append(toggle, seriesChoice(group));
+
+      const body = document.createElement('div');
+      body.className = 'gallery-set-body';
+      body.id = sheetId;
+      body.hidden = true;
+      body.inert = true;
+
+      card.append(head, body);
       return card;
+    }
+
+    // The contact sheet is only built once a row is opened, so a shelf of long series
+    // stays cheap to render.
+    function buildSheet(body, group, index) {
+      const inner = document.createElement('div'); inner.className = 'gallery-set-inner';
+      const toolbar = document.createElement('div'); toolbar.className = 'gallery-set-toolbar';
+      const label = document.createElement('span'); label.className = 'section-label';
+      label.textContent = 'Contact Sheet · Set ' + String(index + 1).padStart(2, '0');
+      const note = document.createElement('p');
+      note.textContent = group.items.length + ' 帧 · 按帧序排列';
+      const close = makeButton('收起 ↑', () => unfold(body.closest('.gallery-set'), false, true), 'gallery-set-close');
+      toolbar.append(label, note, close);
+
+      const sheet = document.createElement('div'); sheet.className = 'gallery-sheet';
+      // With only a handful of frames the prints can breathe and fill the table;
+      // longer series fall back to a denser contact sheet.
+      if (group.items.length <= 4) sheet.classList.add('is-sparse');
+      group.items.forEach((item, order) => {
+        const tile = frameTile(item);
+        // Frames settle in one after another; long series stop accelerating the stagger.
+        tile.style.animationDelay = Math.min(order * 26, 340) + 'ms';
+        sheet.append(tile);
+      });
+      inner.append(toolbar, sheet);
+      body.append(inner);
+    }
+    function sheetFor(card) {
+      const body = card.querySelector('.gallery-set-body');
+      if (!body.dataset.built) {
+        buildSheet(body, card._group, card._index);
+        body.dataset.built = '1';
+      }
+      return body;
+    }
+
+    // Height is driven here rather than by a max-height guess so the reveal can be timed
+    // and reversed exactly, whatever the sheet holds.
+    function unfold(card, open, animate) {
+      const body = sheetFor(card);
+      const inner = body.firstElementChild;
+      const toggle = card.querySelector('.gallery-set-toggle');
+      const name = card._group.title || '未命名系列';
+      card.classList.toggle('is-open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.setAttribute('aria-label', (open ? '收起系列集：' : '展开系列集：') + name);
+      if (open) expandedSeries.add(card._group.id); else expandedSeries.delete(card._group.id);
+      // The 收起 button lives inside the body, so focus has to walk back to the row before
+      // the body goes inert — afterwards the browser has already dropped it.
+      if (!open && body.contains(document.activeElement)) toggle.focus({ preventScroll: true });
+      body.inert = !open;
+
+      // A second click mid-flight must cancel the previous settle, or the old callback
+      // would snap the height it was aiming for.
+      if (body._settleTimer) clearTimeout(body._settleTimer);
+      if (body._settle) body.removeEventListener('transitionend', body._settle);
+      body._settle = null;
+      body._settleTimer = null;
+
+      const reduce = !animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce || !inner) {
+        body.hidden = !open;
+        body.classList.remove('is-unfolding');
+        body.style.height = open ? 'auto' : '';
+        return;
+      }
+
+      // is-unrolling gates the entrance animations, so reopening a row after a re-render
+      // (animate === false) shows the sheet without replaying the reveal.
+      card.classList.add('is-unrolling');
+      body.hidden = false;
+      body.style.height = (open ? 0 : body.getBoundingClientRect().height) + 'px';
+      body.classList.add('is-unfolding');
+      // Force the starting height to be recorded before the target height is applied.
+      void body.offsetHeight;
+      body.style.height = (open ? inner.scrollHeight : 0) + 'px';
+
+      const settle = event => {
+        if (event && event.target !== body) return;
+        if (body._settle !== settle) return;
+        body.removeEventListener('transitionend', settle);
+        clearTimeout(body._settleTimer);
+        body._settle = null;
+        body._settleTimer = null;
+        body.classList.remove('is-unfolding');
+        body.style.height = open ? 'auto' : '';
+        if (!open) body.hidden = true;
+        card.classList.remove('is-unrolling');
+      };
+      body._settle = settle;
+      body.addEventListener('transitionend', settle);
+      body._settleTimer = setTimeout(settle, 700);
     }
 
     function seriesShelf(groups) {
@@ -325,16 +437,25 @@
       const heading = document.createElement('div'); heading.className = 'gallery-series-heading';
       const label = document.createElement('span'); label.className = 'section-label'; label.textContent = 'Series Sets';
       const titleNode = document.createElement('h2'); titleNode.textContent = '系列集';
-      const hint = document.createElement('p'); hint.textContent = '一个系列收成一本。展开才看单帧，不必让整面墙被同一组画面占满。';
+      const hint = document.createElement('p'); hint.textContent = '一个系列收成一行。点开就在这一行里向下铺开单帧联系表，收起后原样归位。';
       const total = document.createElement('span'); total.className = 'gallery-series-total';
       total.textContent = String(groups.length).padStart(2, '0') + ' 组 · ' + groups.reduce((sum, group) => sum + group.items.length, 0) + ' 帧';
       const summary = document.createElement('div'); summary.className = 'gallery-series-summary';
       summary.append(label, titleNode, hint);
       heading.append(summary, total);
-      const grid = document.createElement('div'); grid.className = 'gallery-series-grid';
-      grid.append(...groups.map(albumCard));
-      section.append(heading, grid);
+      const shelf = document.createElement('div'); shelf.className = 'gallery-set-shelf';
+      shelf.append(...groups.map(albumRow));
+      section.append(heading, shelf);
       return section;
+    }
+
+    // A re-render (selection change, sort change, new submission) rebuilds the shelf,
+    // so rows that were open are reopened in place — silently, with no second animation.
+    function restoreExpanded() {
+      document.querySelectorAll('.gallery-set').forEach(card => {
+        if (!expandedSeries.has(card.dataset.seriesId)) return;
+        unfold(card, true, false);
+      });
     }
 
     function timeline() {
@@ -431,7 +552,7 @@
       if (corridorToolbar) corridorToolbar.hidden = !items.some(item => !item.seriesId);
       $('#galleryCorridor').hidden = !items.length || view !== 'corridor';
       $('#galleryCinema').hidden = !items.length || view !== 'cinema';
-      timeline(); selectionUI(); drawSlide();
+      timeline(); restoreExpanded(); selectionUI(); drawSlide();
     }
     function setView(value) {
       view = value; pause();
