@@ -1,6 +1,8 @@
 (function (root) {
   'use strict';
 
+  const Engine = typeof module === 'object' && module.exports ? require('./series-engine') : root.SeriesEngine;
+
   // Series data lives in its own database so that the existing history and gallery
   // stores keep their schema untouched.
   const DB_NAME = 'prompt-studio-series';
@@ -82,6 +84,18 @@
       });
     }
 
+    async function withTransaction(names, mode, action) {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(names, mode);
+        const output = {};
+        tx.oncomplete = () => resolve(output.value);
+        tx.onerror = tx.onabort = () => reject(output.error || tx.error || new Error('系列数据操作已取消'));
+        try { action(tx, output); }
+        catch (error) { tx.abort(); reject(error); }
+      });
+    }
+
     // ---------------------------------------------------------------- series
 
     function listSeries() {
@@ -93,28 +107,113 @@
       return guarded(() => withStore('series', 'readonly', store => store.get(id)));
     }
 
+    function readSeriesBundle(id) {
+      return guarded(() => withTransaction(['series', 'shots', 'assets', 'lore'], 'readonly', (tx, output) => {
+        const bundle = output.value = {};
+        const series = tx.objectStore('series').get(id);
+        series.onsuccess = () => { bundle.series = series.result; };
+        for (const name of ['shots', 'assets', 'lore']) {
+          const request = tx.objectStore(name).index('seriesId').getAll(IDBKeyRange.only(id));
+          request.onsuccess = () => { bundle[name] = request.result; };
+        }
+      })).then(bundle => {
+        bundle.shots.sort((a, b) => (a.order ?? a.index ?? 0) - (b.order ?? b.index ?? 0));
+        return bundle;
+      });
+    }
+
     function putSeries(series) {
       return guarded(() => withStore('series', 'readwrite', store => store.put(series)));
     }
 
+    // Run the existence check and edit in the same transaction. Late model responses
+    // may update an existing target, but must never recreate a deleted owner/record.
+    function patchExisting(name, id, seriesId, edit) {
+      return guarded(() => withTransaction([...new Set(['series', name])], 'readwrite', (tx, output) => {
+        output.value = null;
+        const owner = tx.objectStore('series').get(seriesId);
+        owner.onsuccess = () => {
+          if (!owner.result) return;
+          const apply = record => {
+            if (!record || (name !== 'series' && record.seriesId !== seriesId)) return;
+            try {
+              const updated = edit(record);
+              if (!updated) return;
+              tx.objectStore(name).put(updated);
+              output.value = updated;
+            } catch (error) { output.error = error; tx.abort(); }
+          };
+          if (name === 'series') apply(owner.result);
+          else {
+            const target = tx.objectStore(name).get(id);
+            target.onsuccess = () => apply(target.result);
+          }
+        };
+      }));
+    }
+
+    function updateSeries(id, edit) { return patchExisting('series', id, id, edit); }
+    function updateShot(id, seriesId, edit) { return patchExisting('shots', id, seriesId, edit); }
+    function updateAsset(id, seriesId, edit) { return patchExisting('assets', id, seriesId, edit); }
+
+    function appendShots(seriesId, shots, axes = [], accept = () => true, { deduplicateMatrix = false } = {}) {
+      return guarded(() => withTransaction(['series', 'shots', 'lore', 'assets'], 'readwrite', (tx, output) => {
+        output.value = [];
+        const owner = tx.objectStore('series').get(seriesId);
+        owner.onsuccess = () => {
+          if (!owner.result || !accept()) return;
+          const records = tx.objectStore('shots');
+          const existing = records.index('seriesId').getAll(IDBKeyRange.only(seriesId));
+          const lore = tx.objectStore('lore').index('seriesId').getAllKeys(IDBKeyRange.only(seriesId));
+          const assets = tx.objectStore('assets').index('seriesId').getAllKeys(IDBKeyRange.only(seriesId));
+          assets.onsuccess = () => {
+            if (!accept()) return;
+            try {
+              const order = existing.result.reduce((max, item) => Math.max(max, item.order ?? item.index ?? 0), -1) + 1;
+              const loreIds = new Set(lore.result);
+              const assetIds = new Set(assets.result);
+              const keys = new Set(deduplicateMatrix ? existing.result.map(shot => Engine.matrixKey(shot.axisValues)) : []);
+              const candidates = deduplicateMatrix ? shots.filter(shot => {
+                const key = Engine.matrixKey(shot.axisValues);
+                if (keys.has(key)) return false;
+                keys.add(key);
+                return true;
+              }) : shots;
+              output.value = candidates.map((shot, index) => ({ ...shot, seriesId, order: order + index, index: order + index,
+                ...(deduplicateMatrix ? { code: 'S' + String(order + index + 1).padStart(2, '0') } : {}),
+                loreRefs: (shot.loreRefs || []).filter(id => loreIds.has(id)),
+                references: (shot.references || []).filter(ref => assetIds.has(ref.assetId)) }));
+              for (const shot of output.value) deduplicateMatrix ? records.add(shot) : records.put(shot);
+              if (axes.length && !owner.result.axes?.length) {
+                owner.result.axes = axes;
+                tx.objectStore('series').put(owner.result);
+              }
+            } catch (error) { output.error = error; tx.abort(); }
+          };
+        };
+      }));
+    }
+
+    function appendMatrixShots(seriesId, shots) {
+      return appendShots(seriesId, shots, [], () => true, { deduplicateMatrix: true });
+    }
+
     // Deleting a series must not leave orphaned images behind.
     function deleteSeries(id) {
-      return guarded(async () => {
+      return guarded(() => withTransaction(Object.keys(STORES), 'readwrite', tx => {
         for (const name of ['assets', 'shots', 'runs', 'lore', 'extractions']) {
-          await withStore(name, 'readwrite', store => {
-            const index = store.index('seriesId');
-            const request = index.openKeyCursor(IDBKeyRange.only(id));
-            request.onsuccess = () => {
-              const cursor = request.result;
-              if (!cursor) return;
-              store.delete(cursor.primaryKey);
-              cursor.continue();
-            };
-            return null;
-          });
+          const store = tx.objectStore(name);
+          const index = store.index('seriesId');
+          const request = index.openKeyCursor(IDBKeyRange.only(id));
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) return;
+            store.delete(cursor.primaryKey);
+            cursor.continue();
+          };
         }
-        await withStore('series', 'readwrite', store => store.delete(id));
-      });
+        tx.objectStore('series').delete(id);
+      }));
     }
 
     // ---------------------------------------------------------------- shots
@@ -125,6 +224,54 @@
     }
     function putShot(shot) {
       return guarded(() => withStore('shots', 'readwrite', store => store.put(shot)));
+    }
+
+    function getShot(id) {
+      return guarded(() => withStore('shots', 'readonly', store => store.get(id)));
+    }
+
+    // Publish the image, its frame association and replacement cleanup together.
+    // Nothing is returned to the UI until the entire transaction has committed.
+    function saveGeneration({ seriesId, shotId, asset, result, pendingId }) {
+      return guarded(() => withTransaction(['series', 'shots', 'assets'], 'readwrite', (tx, output) => {
+        output.value = null;
+        const owner = tx.objectStore('series').get(seriesId);
+        owner.onsuccess = () => {
+          if (!owner.result) return;
+          const shots = tx.objectStore('shots');
+          const target = shots.get(shotId);
+          target.onsuccess = () => {
+            const shot = target.result;
+            if (!shot || shot.seriesId !== seriesId) return;
+            if (pendingId ? shot.pendingGeneration?.id !== pendingId : shot.pendingGeneration) return;
+            try {
+              if (!asset?.id || !/^data:image\/(png|jpeg|webp|gif);base64,/i.test(asset.data || '') || asset.seriesId !== seriesId || asset.shotId !== shotId
+                || asset.role !== 'output' || result?.assetId !== asset.id || asset.id === shot.result?.assetId) {
+                throw new Error('生成图片与目标帧不匹配，未保存。');
+              }
+              const assets = tx.objectStore('assets');
+              const previousAssetId = shot.result?.assetId;
+              const saved = { ...shot, result, status: 'done', canonVersion: result.canonVersion ?? shot.canonVersion, updatedAt: Date.now() };
+              if (pendingId) saved.pendingGeneration = null;
+              // add() also prevents a colliding ID from overwriting another image.
+              assets.add(asset);
+              shots.put(saved);
+              output.value = { shot: saved, removedAssetId: null };
+              if (previousAssetId) {
+                const previous = assets.get(previousAssetId);
+                previous.onsuccess = () => {
+                  const old = previous.result;
+                  if (old?.seriesId !== seriesId || old.role !== 'output' || (old.shotId && old.shotId !== shotId)) return;
+                  try {
+                    assets.delete(previousAssetId);
+                    output.value.removedAssetId = previousAssetId;
+                  } catch (error) { output.error = error; tx.abort(); }
+                };
+              }
+            } catch (error) { output.error = error; tx.abort(); }
+          };
+        };
+      }));
     }
 
     function putShots(shots) {
@@ -150,6 +297,25 @@
 
     function putAsset(asset) {
       return guarded(() => withStore('assets', 'readwrite', store => store.put(asset)));
+    }
+
+    function addAssetToSeries(asset, { deduplicate = true } = {}) {
+      return guarded(() => withTransaction(['series', 'assets'], 'readwrite', (tx, output) => {
+        const owner = tx.objectStore('series').get(asset.seriesId);
+        owner.onsuccess = () => {
+          if (!owner.result) { output.value = { added: false, reason: 'missing' }; return; }
+          const assets = tx.objectStore('assets');
+          const existing = assets.index('seriesId').getAll(IDBKeyRange.only(asset.seriesId));
+          existing.onsuccess = () => {
+            if (deduplicate && asset.sha256 && existing.result.some(item => item.sha256 === asset.sha256)) {
+              output.value = { added: false, reason: 'duplicate' };
+            } else {
+              assets.put(asset);
+              output.value = { added: true };
+            }
+          };
+        };
+      }));
     }
 
     function deleteAsset(id) {
@@ -187,7 +353,10 @@
     }
 
     function putExtraction(record) {
-      return guarded(() => withStore('extractions', 'readwrite', store => store.put(record)));
+      return guarded(() => withTransaction(['series', 'extractions'], 'readwrite', tx => {
+        const owner = tx.objectStore('series').get(record.seriesId);
+        owner.onsuccess = () => { if (owner.result) tx.objectStore('extractions').put(record); };
+      }));
     }
 
     function deleteExtraction(id) {
@@ -217,15 +386,24 @@
       open,
       listSeries,
       getSeries,
+      readSeriesBundle,
       putSeries,
+      updateSeries,
       deleteSeries,
       listShots,
+      getShot,
+      saveGeneration,
       putShot,
       putShots,
+      appendShots,
+      appendMatrixShots,
+      updateShot,
       deleteShot,
       listAssets,
       getAsset,
       putAsset,
+      addAssetToSeries,
+      updateAsset,
       deleteAsset,
       listLore,
       putLore,

@@ -24,6 +24,13 @@
     // Frames ticked for batch generation, independent of the inspector selection.
     selectedShotIds: new Set(),
     busy: false,
+    generationTask: null,
+    volatileGenerations: new Map(),
+    openRequest: null,
+    uploads: new Map(),
+    modelTasks: new Map(),
+    extractTask: null,
+    splitTask: null,
     extracting: false,
     analyzing: false,
     batch: null,
@@ -43,6 +50,49 @@
   function clearStatus() {
     const node = $('#seriesStatus');
     if (node) node.hidden = true;
+  }
+
+  function isCurrentSeries(seriesId) {
+    return state.series?.id === seriesId;
+  }
+
+  function isVisibleSeries(seriesId) {
+    return isCurrentSeries(seriesId) && !$('#seriesPage').hidden;
+  }
+
+  function isGeneratingShot(shot) {
+    return state.generationTask?.seriesId === shot.seriesId && state.generationTask.shotId === shot.id;
+  }
+
+  function beginModelTask(type, seriesId, targetId = '') {
+    const key = JSON.stringify([type, seriesId, targetId]);
+    if (state.modelTasks.has(key)) return null;
+    const task = { id: uid('model'), key, type, seriesId, targetId, cancelled: false };
+    state.modelTasks.set(key, task);
+    return task;
+  }
+
+  function finishModelTask(task) {
+    if (state.modelTasks.get(task.key) === task) state.modelTasks.delete(task.key);
+  }
+
+  function modelStatus(task, message, type) {
+    if (isVisibleSeries(task.seriesId)) status(message, type);
+  }
+
+  function syncSeriesRecord(series) {
+    if (!series) return;
+    const index = state.list.findIndex(item => item.id === series.id);
+    if (index >= 0) state.list[index] = series;
+    if (isCurrentSeries(series.id)) state.series = series;
+    renderSeriesList();
+  }
+
+  function syncAssetRecord(asset) {
+    if (!asset || !isCurrentSeries(asset.seriesId)) return;
+    const index = state.assets.findIndex(item => item.id === asset.id);
+    if (index >= 0) state.assets[index] = asset;
+    else state.assets.push(asset);
   }
 
   // A single in-app confirmation dialog replaces window.confirm for every destructive or
@@ -303,36 +353,69 @@
 
   async function saveSeries(patch = {}) {
     if (!state.series) return;
-    Object.assign(state.series, patch, { updatedAt: Date.now() });
-    state.series.canon.anchorSentence = Engine.renderAnchor(state.series.canon);
-    await store.putSeries(state.series);
+    const series = state.series;
+    Object.assign(series, patch, { updatedAt: Date.now() });
+    series.canon.anchorSentence = Engine.renderAnchor(series.canon);
+    await store.putSeries(series);
     // Keep the sidebar entry in sync; without this it keeps showing the old canon version.
-    const index = state.list.findIndex(item => item.id === state.series.id);
-    if (index >= 0) state.list[index] = state.series;
-    else state.list.unshift(state.series);
+    const index = state.list.findIndex(item => item.id === series.id);
+    if (index >= 0) state.list[index] = series;
+    else state.list.unshift(series);
     state.list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     renderHeader();
     renderSeriesList();
   }
 
   async function openSeries(id) {
-    const series = await store.getSeries(id);
-    if (!series) return;
+    const request = { id };
+    state.openRequest = request;
+    let bundle;
+    try { bundle = await store.readSeriesBundle(id); }
+    catch (error) {
+      if (state.openRequest === request) {
+        state.openRequest = null;
+        status('无法读取系列：' + describeError(error), 'error');
+      }
+      return false;
+    }
+    if (state.openRequest !== request) return false;
+    state.openRequest = null;
+    const { series, shots, assets, lore } = bundle;
+    if (!series) return false;
+    for (const shot of shots) {
+      const pending = state.volatileGenerations.get(shot.id);
+      if (!pending) continue;
+      if (shot.pendingGeneration && shot.pendingGeneration.id !== pending.id) {
+        state.volatileGenerations.delete(shot.id);
+      } else {
+        shot.pendingGeneration = pending;
+        shot.status = 'pending-save';
+      }
+    }
     state.series = series;
     state.selectedShotId = null;
     state.selectedShotIds.clear();
-    state.shots = await store.listShots(id);
-    state.assets = await store.listAssets(id);
-    state.lore = await store.listLore(id);
+    state.shots = shots;
+    state.assets = assets;
+    state.lore = lore;
     $('#seriesMain').hidden = false;
     $('#seriesInspector').hidden = true;
     $('#seriesName').value = series.title || '';
     $('#seriesExport').disabled = false;
     renderAll();
     closeInspector();
+    renderSeriesList();
+    clearStatus();
+    if (state.generationTask?.seriesId === id) {
+      status(state.generationTask.saving ? '正在保存 ' + state.generationTask.code + ' 的图片。' : '正在生成 ' + state.generationTask.code + '，最多等待 5 分钟。');
+    } else if (shots.some(shot => shot.pendingGeneration)) {
+      status('有图片待保存，请打开对应画面重试保存；不会重新调用生图模型。');
+    }
+    return true;
   }
 
   function closeSeries() {
+    state.openRequest = null;
     state.series = null;
     state.shots = [];
     state.assets = [];
@@ -368,18 +451,27 @@
       );
       const remove = button('×', 'series-list-remove', async event => {
         event.stopPropagation();
+        if (state.generationTask?.seriesId === series.id) return;
         const ok = await confirmAction({
           title: '删除系列',
           text: '删除「' + (series.title || '未命名') + '」及其全部帧和图片？此操作无法撤销。',
           confirmLabel: '删除'
         });
-        if (!ok) return;
+        if (!ok || state.generationTask?.seriesId === series.id) return;
+        if (state.openRequest?.id === series.id) state.openRequest = null;
         await store.deleteSeries(series.id);
+        for (const [shotId, pending] of state.volatileGenerations) {
+          if (pending.asset.seriesId === series.id) state.volatileGenerations.delete(shotId);
+        }
         if (state.series && state.series.id === series.id) closeSeries();
         await loadSeriesList();
         status('已删除系列。');
       });
       remove.setAttribute('aria-label', '删除系列 ' + (series.title || ''));
+      remove.dataset.action = 'delete-series';
+      remove.disabled = state.generationTask?.seriesId === series.id;
+      remove.title = remove.disabled ? '此系列正在生成，完成后可删除' : '删除系列';
+      if (remove.disabled) remove.setAttribute('aria-label', '此系列正在生成，完成后可删除');
       item.append(open, remove);
       return item;
     }));
@@ -616,6 +708,7 @@
     axisGroup.append(el('p', 'field-hint', '每个轴是一组取值。矩阵视图会按轴展开帧。'));
     (series.axes || []).forEach((axis, index) => {
       const row = el('div', 'series-axis-row');
+      row.dataset.axisId = axis.id;
       const label = el('input');
       label.type = 'text';
       label.value = axis.label || '';
@@ -637,15 +730,21 @@
         renderCanon();
       });
       remove.setAttribute('aria-label', '移除轴 ' + (axis.label || index + 1));
+      remove.dataset.action = 'remove-axis';
       row.append(label, values, remove);
       axisGroup.append(row);
     });
-    axisGroup.append(button('＋ 添加轴', 'text-action', () => {
+    const addAxis = button('＋ 添加轴', 'text-action', () => {
       series.axes = series.axes || [];
-      series.axes.push({ id: 'axis' + (series.axes.length + 1), label: '', values: [] });
+      const used = new Set([...series.axes.map(axis => axis.id), ...state.shots.flatMap(shot => Object.keys(shot.axisValues || {}))]);
+      let id;
+      do { id = uid('axis'); } while (used.has(id));
+      series.axes.push({ id, label: '', values: [] });
       series.canonDirty = true;
       renderCanon();
-    }));
+    });
+    addAxis.dataset.action = 'add-axis';
+    axisGroup.append(addAxis);
 
     form.replaceChildren(...groups, paletteGroup, termGroup, negativeGroup, axisGroup);
     updateAnchorPreview();
@@ -686,17 +785,17 @@
 
   // New frames inherit the series-level anchors so the common case needs no manual setup.
   // The user can still override or clear each slot per frame.
-  function inheritedReferences() {
-    const defaults = state.series?.gallery?.defaults || {};
+  function inheritedReferences(series = state.series, assets = state.assets) {
+    const defaults = series?.gallery?.defaults || {};
     return ['character', 'style', 'scene', 'prop']
-      .filter(slot => defaults[slot] && assetFor(defaults[slot]))
+      .filter(slot => defaults[slot] && assets.some(asset => asset.id === defaults[slot]))
       .map(slot => ({ assetId: defaults[slot], slot }));
   }
 
-  function newShot(index) {
+  function newShot(index, series = state.series, assets = state.assets) {
     return {
       id: uid('sht'),
-      seriesId: state.series.id,
+      seriesId: series.id,
       order: index,
       index,
       code: 'S' + String(index + 1).padStart(2, '0'),
@@ -708,11 +807,11 @@
       detail: '',
       negative: [],
       axisValues: {},
-      references: inheritedReferences(),
+      references: inheritedReferences(series, assets),
       loreRefs: [],
       status: 'draft',
       origin: 'manual',
-      canonVersion: state.series.canon.version || 1,
+      canonVersion: series.canon.version || 1,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -721,6 +820,7 @@
   async function persistShot(shot) {
     shot.updatedAt = Date.now();
     await store.putShot(shot);
+    if (!isCurrentSeries(shot.seriesId)) return;
     const index = state.shots.findIndex(item => item.id === shot.id);
     if (index >= 0) state.shots[index] = shot;
     else state.shots.push(shot);
@@ -737,12 +837,12 @@
     selectShot(shot.id);
   }
 
-  function compileFor(shot) {
+  function compileFor(shot, render = renderConfig()) {
     const series = state.series;
-    const render = renderConfig();
     return Engine.compileShot({
       canon: series.canon,
       shot,
+      axes: series.axes || [],
       gallery: state.assets,
       lore: state.lore,
       size: render.size,
@@ -768,7 +868,7 @@
     return null;
   }
 
-  function renderShots() {
+  function renderShots({ updateInspector = true } = {}) {
     const list = $('#seriesShotList');
     if (!state.series) return;
     // Drop selections that no longer exist (frames deleted or series switched).
@@ -800,8 +900,10 @@
       const title = el('h3', 'series-shot-title', shot.title || shot.subject || '未命名帧');
       const summary = el('p', 'series-shot-summary', [shot.subject, shot.action, shot.scene].filter(Boolean).join(' · ') || '还没有描述');
       body.append(title, summary);
-      const state_ = el('span', 'series-shot-state', shot.result?.assetId ? '已出图' : shot.status === 'failed' ? '失败' : shot.status === 'deviation' ? '偏离' : '草稿');
-      state_.dataset.state = shot.result?.assetId ? 'done' : shot.status;
+      const running = isGeneratingShot(shot);
+      const saving = running && state.generationTask.saving;
+      const state_ = el('span', 'series-shot-state', running ? (saving ? '保存中' : '生成中') : shot.pendingGeneration ? '待保存' : shot.result?.assetId ? '已出图' : shot.status === 'failed' ? '失败' : shot.status === 'deviation' ? '偏离' : '草稿');
+      state_.dataset.state = running ? 'running' : shot.pendingGeneration ? 'pending-save' : shot.result?.assetId ? 'done' : shot.status;
       const thumb = el('div', 'series-shot-thumb');
       const result = shot.result?.assetId ? assetFor(shot.result.assetId) : null;
       if (result?.data) {
@@ -823,7 +925,7 @@
     $('#seriesShotsEmpty').hidden = state.shots.length > 0 || fresh;
     renderSelectionBar();
     updateGalleryButtons();
-    if (state.selectedShotId) renderInspector();
+    if (updateInspector && state.selectedShotId) renderInspector();
   }
 
   function renderSelectionBar() {
@@ -967,6 +1069,7 @@
       if (key === 'detail') input.rows = 3;
       else input.type = 'text';
       input.value = shot[key] || '';
+      input.dataset.shotField = key;
       input.placeholder = placeholder;
       input.addEventListener('input', () => { shot[key] = input.value; });
       input.addEventListener('change', async () => {
@@ -979,19 +1082,26 @@
     }
 
     // Axis values
-    if ((series.axes || []).some(axis => axis.values.length)) {
+    const inspectorAxes = (series.axes || []).filter(axis => axis.values?.length).slice();
+    for (const [id, value] of Object.entries(shot.axisValues || {})) {
+      if (value && !inspectorAxes.some(axis => axis.id === id)) inspectorAxes.push({ id, label: id, values: [] });
+    }
+    if (inspectorAxes.length) {
       const axisBox = el('div', 'series-inspector-axes');
       axisBox.append(el('span', 'section-label', '轴取值'));
-      for (const axis of series.axes.filter(item => item.values.length)) {
+      for (const axis of inspectorAxes) {
         const row = el('label', 'series-inspector-field');
         row.append(el('span', '', axis.label || axis.id));
         const select = el('select');
+        select.dataset.axisId = axis.id;
         select.append(new Option('未指定', ''));
         for (const value of axis.values) select.append(new Option(value, value));
+        if (shot.axisValues?.[axis.id] && !axis.values.includes(shot.axisValues[axis.id])) {
+          select.append(new Option(shot.axisValues[axis.id] + '（原取值）', shot.axisValues[axis.id]));
+        }
         select.value = shot.axisValues?.[axis.id] || '';
         select.addEventListener('change', async () => {
           shot.axisValues = { ...(shot.axisValues || {}), [axis.id]: select.value };
-          if (!shot.scene && axis.id === 'scene') shot.scene = select.value;
           await persistShot(shot);
           updatePreview();
         });
@@ -1106,31 +1216,61 @@
       meta.dataset.over = String(compiled.overLimit);
       warnings.replaceChildren(...compiled.warnings.map(line => el('li', '', line)));
       warnings.hidden = compiled.warnings.length === 0;
-      generate.disabled = state.busy || compiled.overLimit;
+      generate.disabled = state.busy || Boolean(shot.pendingGeneration) || compiled.overLimit || compiled.blocked;
     }
 
     // Actions must be created before the first updatePreview call: updatePreview writes
     // into the generate button, and a later declaration would be in the temporal dead zone.
     const actions = el('div', 'series-inspector-actions');
     const generate = button('生成这一帧', 'button primary', () => generateShot(shot));
+    generate.dataset.action = 'generate-shot';
+    generate.textContent = isGeneratingShot(shot) ? (state.generationTask.saving ? '保存中…' : '生成中…') : '生成这一帧';
+    generate.title = shot.pendingGeneration ? '请先保存或放弃待保存图片' : state.busy ? '请等待当前任务完成' : '';
     const remove = button('删除这一帧', 'button text-button', async () => {
+      if (isGeneratingShot(shot)) return;
       const ok = await confirmAction({
         title: '删除这一帧',
         text: '删除「' + (shot.title || shot.code || '这一帧') + '」？已生成的图片也会一并移除。',
         confirmLabel: '删除'
       });
-      if (!ok) return;
+      if (!ok || isGeneratingShot(shot)) return;
       if (shot.result?.assetId) await store.deleteAsset(shot.result.assetId);
       await store.deleteShot(shot.id);
+      state.volatileGenerations.delete(shot.id);
       state.shots = state.shots.filter(item => item.id !== shot.id);
       closeInspector();
       renderShots();
       renderHeader();
     });
     const optimize = button('用模型扩写', 'button secondary', () => expandShot(shot));
+    optimize.dataset.action = 'expand-shot';
+    optimize.disabled = [...state.modelTasks.values()].some(task => task.type === 'expand' && task.seriesId === shot.seriesId && task.targetId === shot.id);
+    if (optimize.disabled) optimize.textContent = '扩写中…';
+    remove.dataset.action = 'delete-shot';
+    remove.disabled = isGeneratingShot(shot);
+    remove.title = remove.disabled ? '这一帧正在生成，完成后可删除' : '';
+    if (remove.disabled) remove.textContent = '生成中，暂不可删除';
     actions.append(optimize, generate, remove);
     body.append(actions);
     updatePreview();
+
+    if (shot.pendingGeneration) {
+      const pending = shot.pendingGeneration;
+      const notice = el('div', 'series-hint');
+      notice.dataset.testid = 'pending-generation';
+      notice.append(el('p', '', '图片已生成，尚未保存到本地。' + (shot.result?.assetId ? '当前仍采用原有图片。' : '')
+        + '重试保存不会重新调用生图模型；远程链接可能过期。'));
+      if (pending.error) notice.append(el('p', '', pending.error));
+      if (!pending.persisted) notice.append(el('p', '', '待保存信息尚未写入浏览器，请勿刷新或关闭页面。'));
+      const retry = button('重试保存图片', 'button secondary', () => retryGenerationSave(shot));
+      retry.dataset.action = 'retry-generation-save';
+      retry.disabled = state.busy;
+      const discard = button('放弃待保存图片', 'button text-button', () => discardPendingGeneration(shot));
+      discard.dataset.action = 'discard-pending-generation';
+      discard.disabled = isGeneratingShot(shot);
+      notice.append(retry, discard);
+      body.append(notice);
+    }
 
     if (shot.result?.assetId) {
       const asset = assetFor(shot.result.assetId);
@@ -1148,11 +1288,16 @@
           button('下载 ↗', 'text-action', () => downloadAsset(asset)),
           collect
         );
+        if (/^https?:/i.test(asset.data) && !shot.pendingGeneration) {
+          const local = button('保存到本地', 'text-action', () => retryGenerationSave(shot));
+          local.dataset.action = 'localize-generation';
+          local.disabled = state.busy;
+          caption.append(local);
+        }
         result.append(image, caption);
         body.append(result);
       }
     }
-    generate.disabled = state.busy;
   }
 
   // The create page's preview dialog is reused so series images open in the same lightbox.
@@ -1208,12 +1353,20 @@
 
   async function generateShot(shot) {
     if (state.busy) return;
+    if (shot.pendingGeneration) { status('这张图片待保存，请先重试保存或放弃待保存图片。'); return; }
+    const series = state.series;
+    if (!series || shot.seriesId !== series.id) return;
     const config = imageConfig();
     if (!config.apiKey || !config.model) {
       status('请先在「设置」中填写图片生成 API 的 Key 和模型。', 'error');
       return;
     }
-    const compiled = compileFor(shot);
+    const render = renderConfig();
+    const compiled = compileFor(shot, render);
+    if (compiled.blocked) {
+      status('提示词存在变量冲突：' + compiled.conflicts.join(' '), 'error');
+      return;
+    }
     if (compiled.overLimit) {
       status('这一帧的提示词超过上限，请精简后再生成。', 'error');
       return;
@@ -1225,71 +1378,225 @@
       return;
     }
 
+    // Everything used by this request is captured before the first await. Credentials
+    // stay in the request body only; the result stores a separate, safe snapshot.
+    const task = {
+      seriesId: series.id,
+      shotId: shot.id,
+      code: shot.code,
+      canonVersion: series.canon.version || 1,
+      startedAt: Date.now(),
+      prompt: compiled.prompt,
+      parameters: structuredClone({ model: config.model, ...render, n: 1, capabilities: config.capabilities }),
+      references: compiled.references.map(entry => {
+        const asset = assetFor(entry.assetId);
+        return { ...entry, mime: asset?.mime || 'image/png', sha256: asset?.sha256 || '' };
+      }),
+      previousAssetId: shot.result?.assetId,
+      baseline: state.assets.find(item => item.role === 'output' && item.id !== shot.result?.assetId)
+    };
+    const request = { ...config, ...render, prompt: compiled.requestPrompt, n: 1, references };
+    state.generationTask = task;
     state.busy = true;
     shot.status = 'running';
+    renderSeriesList();
     renderShots();
     renderInspector();
     status('正在生成 ' + shot.code + '，最多等待 5 分钟。');
 
     try {
-      const render = renderConfig();
-      const data = await post('/api/generate', {
-        ...config,
-        prompt: compiled.prompt,
-        size: render.size,
-        quality: render.quality,
-        responseFormat: render.responseFormat,
-        n: 1,
-        references
-      });
+      const data = await post('/api/generate', request);
       const image = data.images?.[0];
       if (!image) throw new Error('接口没有返回图片');
+      task.receivedImage = true;
       const asset = {
         id: uid('ast'),
-        seriesId: state.series.id,
-        shotId: shot.id,
+        seriesId: task.seriesId,
+        shotId: task.shotId,
         role: 'output',
-        name: shot.code + ' 出图',
+        name: task.code + ' 出图',
         mime: image.mime || 'image/png',
         data: image.b64_json ? 'data:' + (image.mime || 'image/png') + ';base64,' + image.b64_json : image.url,
         createdAt: Date.now()
       };
-      await store.putAsset(asset);
-      state.assets.push(asset);
-      // Regenerating replaces the old result; drop the previous image instead of orphaning it.
-      const previousAssetId = shot.result?.assetId;
-      if (previousAssetId && previousAssetId !== asset.id) {
-        await store.deleteAsset(previousAssetId).catch(() => {});
-        state.assets = state.assets.filter(item => item.id !== previousAssetId);
+      const result = {
+        assetId: asset.id,
+        drift: 0,
+        prompt: task.prompt,
+        canonVersion: task.canonVersion,
+        parameters: task.parameters,
+        references: task.references,
+        startedAt: task.startedAt
+      };
+      if (!image.b64_json) {
+        if (!/^https?:\/\//i.test(image.url || '')) throw new Error('接口没有返回有效的图片链接');
+        task.pending = { id: uid('pending'), asset, result, persisted: false };
+        await saveRemoteGeneration(task, shot);
+        return;
       }
-      shot.result = { assetId: asset.id, drift: await driftScore(asset), prompt: compiled.prompt };
-      shot.status = 'done';
-      shot.canonVersion = state.series.canon.version;
-      await persistShot(shot);
-      renderShots();
-      renderInspector();
-      renderHeader();
-      status(shot.code + ' 生成完成。' + (shot.result.drift > 0.35 ? '这张与系列基线差异较大，可考虑加强锚点重生成。' : ''), 'success');
+      result.drift = await driftScore(asset, task.baseline);
+      const saved = await store.saveGeneration({ seriesId: task.seriesId, shotId: task.shotId, asset, result });
+      if (!saved) return;
+      publishGeneration(task, shot, saved, asset);
+      if (isVisibleSeries(task.seriesId)) {
+        status(task.code + ' 生成完成。' + (result.drift > 0.35 ? '这张与系列基线差异较大，可考虑加强锚点重生成。' : ''), 'success');
+      }
     } catch (error) {
-      shot.status = 'failed';
-      await persistShot(shot).catch(() => {});
-      renderShots();
-      renderInspector();
-      status('生成失败：' + describeError(error), 'error');
+      if (task.pending) {
+        await markPendingGeneration(task, shot, error);
+        return;
+      }
+      const failed = await store.updateShot(task.shotId, task.seriesId,
+        current => ({ ...current, status: 'failed', updatedAt: Date.now() })).catch(() => null);
+      // Even when storage remains unavailable, release the local running state;
+      // never expose a result that was rolled back or discard the adopted image.
+      syncGeneration(task, shot, { status: 'failed', ...(failed ? { updatedAt: failed.updatedAt } : {}) });
+      if (isVisibleSeries(task.seriesId)) {
+        status((task.receivedImage ? '图片已返回，但保存失败：' : '生成失败：') + describeError(error)
+          + (task.receivedImage && shot.result?.assetId ? ' 原有图片已保留。' : ''), 'error');
+      }
     } finally {
-      state.busy = false;
-      renderInspector();
-      updateGalleryButtons();
+      finishGeneration(task);
     }
+  }
+
+  function publishGeneration(task, shot, saved, asset) {
+    syncGeneration(task, shot, { result: saved.shot.result, status: saved.shot.status,
+      canonVersion: saved.shot.canonVersion, updatedAt: saved.shot.updatedAt,
+      ...(task.pending ? { pendingGeneration: null } : {}) });
+    if (isCurrentSeries(task.seriesId)) {
+      state.assets = state.assets.filter(item => item.id !== saved.removedAssetId && item.id !== asset.id);
+      state.assets.push(asset);
+    }
+  }
+
+  function finishGeneration(task) {
+    state.busy = false;
+    state.generationTask = null;
+    renderSeriesList();
+    if (isVisibleSeries(task.seriesId)) {
+      renderShots();
+      renderHeader();
+      if (state.view === 'matrix') renderMatrix();
+    } else if (state.series && !$('#seriesPage').hidden) {
+      // Release controls without replacing another series' unsaved inspector inputs.
+      const current = state.shots.find(item => item.id === state.selectedShotId);
+      const generate = $('[data-action=generate-shot]');
+      if (generate) {
+        const compiled = current && compileFor(current);
+        generate.disabled = !current || Boolean(current.pendingGeneration) || compiled.overLimit || compiled.blocked;
+        generate.title = current?.pendingGeneration ? '请先保存或放弃待保存图片' : '';
+      }
+      for (const action of ['retry-generation-save', 'localize-generation']) {
+        const control = $('[data-action=' + action + ']');
+        if (control) control.disabled = false;
+      }
+    }
+  }
+
+  async function saveRemoteGeneration(task, shot) {
+    const pending = task.pending;
+    // Persist the safe response snapshot before downloading. A refresh can then
+    // offer an explicit save retry, without issuing another billable request.
+    const staged = await store.updateShot(task.shotId, task.seriesId, current => {
+      if (pending.persisted && current.pendingGeneration?.id !== pending.id) return null;
+      if (current.pendingGeneration && current.pendingGeneration.id !== pending.id) return null;
+      return { ...current, pendingGeneration: { ...pending, persisted: true, error: '' }, status: 'pending-save', updatedAt: Date.now() };
+    });
+    if (!staged) return;
+    task.pending = staged.pendingGeneration;
+    task.saving = true;
+    syncGeneration(task, shot, { pendingGeneration: task.pending, status: 'pending-save' });
+    if (isVisibleSeries(task.seriesId)) {
+      status('图片已生成，正在下载并保存到本地。');
+      renderShots();
+    }
+    const blob = await blobFromSource(task.pending.asset.data);
+    if (!blob.size || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(blob.type)) {
+      throw new Error('下载内容不是支持的图片格式');
+    }
+    // Decode before adopting so an HTML/error body labelled as an image cannot
+    // replace the existing result with an unusable local resource.
+    const asset = { ...task.pending.asset, mime: blob.type, data: await blobToDataUrl(blob) };
+    const decoded = new Image();
+    decoded.src = asset.data;
+    try { await decoded.decode(); } catch { throw new Error('下载的图片无法读取，请重试保存'); }
+    const result = { ...task.pending.result, drift: await driftScore(asset, task.baseline) };
+    const saved = await store.saveGeneration({ seriesId: task.seriesId, shotId: task.shotId,
+      asset, result, pendingId: task.pending.id });
+    if (!saved) return;
+    publishGeneration(task, shot, saved, asset);
+    if (isVisibleSeries(task.seriesId)) status(task.code + ' 图片已保存到本地。', 'success');
+  }
+
+  async function markPendingGeneration(task, shot, error) {
+    const pending = { ...task.pending, error: describeError(error) };
+    const saved = await store.updateShot(task.shotId, task.seriesId, current => {
+      if (pending.persisted && current.pendingGeneration?.id !== pending.id) return null;
+      if (current.pendingGeneration && current.pendingGeneration.id !== pending.id) return null;
+      return { ...current, pendingGeneration: { ...pending, persisted: true }, status: 'pending-save', updatedAt: Date.now() };
+    }).catch(() => false);
+    // null means the owner/target (or this pending response) disappeared.
+    if (saved === null) return;
+    syncGeneration(task, shot, { pendingGeneration: saved ? saved.pendingGeneration : pending, status: 'pending-save' });
+    if (isVisibleSeries(task.seriesId)) status('图片待保存：' + pending.error
+      + (shot.result?.assetId ? ' 原有图片已保留。' : '') + ' 可重试保存，不会重新调用生图模型。', 'error');
+  }
+
+  async function retryGenerationSave(shot) {
+    if (state.busy || !isCurrentSeries(shot.seriesId)) return;
+    const existing = shot.result?.assetId && assetFor(shot.result.assetId);
+    const pending = shot.pendingGeneration || (existing && /^https?:/i.test(existing.data) ? (() => {
+      const asset = { ...existing, id: uid('ast'), shotId: shot.id };
+      return { id: uid('pending'), asset, result: { ...shot.result, assetId: asset.id }, persisted: false };
+    })() : null);
+    if (!pending) return;
+    const task = { seriesId: shot.seriesId, shotId: shot.id, code: shot.code, saving: true, pending: structuredClone(pending),
+      baseline: state.assets.find(item => item.role === 'output' && item.id !== shot.result?.assetId) };
+    state.generationTask = task;
+    state.busy = true;
+    renderSeriesList();
+    renderShots();
+    try { await saveRemoteGeneration(task, shot); }
+    catch (error) { await markPendingGeneration(task, shot, error); }
+    finally { finishGeneration(task); }
+  }
+
+  async function discardPendingGeneration(shot) {
+    if (isGeneratingShot(shot) || !shot.pendingGeneration) return;
+    const pendingId = shot.pendingGeneration.id;
+    const ok = await confirmAction({ title: '放弃待保存图片', text: '放弃后无法再保存这次返回的图片。原有图片会保留；重新生成将再次调用模型。', confirmLabel: '放弃' });
+    if (!ok || isGeneratingShot(shot) || shot.pendingGeneration?.id !== pendingId) return;
+    try {
+      const saved = await store.updateShot(shot.id, shot.seriesId, current => {
+        if (current.pendingGeneration && current.pendingGeneration.id !== pendingId) return null;
+        return { ...current, pendingGeneration: null, status: current.result?.assetId ? 'done' : 'draft', updatedAt: Date.now() };
+      });
+      if (!saved) return;
+      syncGeneration({ seriesId: shot.seriesId, shotId: shot.id }, shot,
+        { pendingGeneration: null, status: saved.status, updatedAt: saved.updatedAt });
+      if (isVisibleSeries(shot.seriesId)) { renderShots(); status('已放弃待保存图片。'); }
+    } catch (error) { if (isVisibleSeries(shot.seriesId)) status('未能放弃待保存图片：' + describeError(error), 'error'); }
+  }
+
+  function syncGeneration(task, originalShot, patch) {
+    // Publish only committed result fields. Keep the live object (and any edits
+    // made while saving) rather than replacing it with a database snapshot.
+    const current = isCurrentSeries(task.seriesId) && state.shots.find(item => item.id === task.shotId);
+    if ('pendingGeneration' in patch) {
+      if (patch.pendingGeneration && !patch.pendingGeneration.persisted) state.volatileGenerations.set(task.shotId, patch.pendingGeneration);
+      else state.volatileGenerations.delete(task.shotId);
+    }
+    if (current) Object.assign(current, patch);
+    Object.assign(originalShot, patch);
   }
 
   // ---------------------------------------------------------------- drift
 
   const drift = root.createSeriesDrift ? root.createSeriesDrift() : null;
 
-  async function driftScore(asset) {
+  async function driftScore(asset, baseline) {
     if (!drift || !asset?.data) return 0;
-    const baseline = state.assets.find(item => item.role === 'output' && item.id !== asset.id);
     if (!baseline) return 0;
     try {
       return await drift.compare(asset.data, baseline.data);
@@ -1314,10 +1621,15 @@
     const config = optimizerConfig();
     const prepared = Llm.splitChunks(theme);
     if (!prepared.total) { status('主题原文为空，无法提炼。', 'error'); return; }
+    const task = beginModelTask('extract', seriesId);
+    if (!task) return;
+    const gallerySignature = isCurrentSeries(seriesId) ? state.assets.map(asset => asset.id).join(',') : '';
+    state.extractTask = task;
 
     state.extracting = true;
     state.extractProgress = { done: 0, total: prepared.total, reused: 0 };
     openExtractDialog();
+    $('#seriesExtractDialog').dataset.taskId = task.id;
     $('#seriesExtractEstimate').textContent = '约 ' + prepared.total + ' 次分块调用 + 1 次汇总。暂停后再次提炼会跳过已完成的块，不重复计费。';
     $('#seriesExtractPause').textContent = '暂停';
     $('#seriesExtractPause').hidden = false;
@@ -1327,8 +1639,17 @@
     const llm = Llm.createSeriesLlm({
       request: post,
       concurrency: 2,
-      store,
+      store: {
+        getExtraction: async key => {
+          const cached = await store.getExtraction(seriesId + ':' + key);
+          if (cached) return cached;
+          const legacy = await store.getExtraction(key);
+          return legacy?.seriesId === seriesId ? legacy : null;
+        },
+        putExtraction: record => store.putExtraction({ ...record, id: seriesId + ':' + record.id })
+      },
       onProgress: event => {
+        if (task.cancelled || state.extractTask !== task) return;
         if (event.phase === 'cache') {
           $('#seriesExtractBar').style.width = '100%';
           $('#seriesExtractDetail').textContent = '命中缓存，没有产生新的模型调用。';
@@ -1346,6 +1667,7 @@
       }
     });
     state.llm = llm;
+    task.llm = llm;
 
     try {
       const result = await llm.extract({
@@ -1354,25 +1676,29 @@
         seriesId,
         model: config.model,
         promptVersion: Prompts ? Prompts.SERIES_PROMPT_VERSION : 1,
-        gallerySignature: state.assets.map(asset => asset.id).join(',')
+        gallerySignature
       });
+      if (task.cancelled) return;
       $('#seriesExtractBar').style.width = '100%';
       $('#seriesExtractDetail').textContent = result.cached ? '已从缓存恢复提炼结果。' : '提炼完成。';
-      onDone(result);
+      const applied = await onDone(result);
+      if (applied === false) { closeExtractDialog(); return; }
       const reused = result.reused ? '，其中 ' + result.reused + ' 块沿用缓存' : '';
-      status(result.cached ? '已使用缓存的提炼结果。' : '提炼完成，共 ' + result.coverage.used + ' / ' + result.coverage.total + ' 块有效' + reused + '。', 'success');
-      setTimeout(closeExtractDialog, 600);
+      modelStatus(task, result.cached ? '已使用缓存的提炼结果。' : '提炼完成，共 ' + result.coverage.used + ' / ' + result.coverage.total + ' 块有效' + reused + '。', 'success');
+      setTimeout(() => { if ($('#seriesExtractDialog').dataset.taskId === task.id) closeExtractDialog(); }, 600);
     } catch (error) {
       if (error?.name === 'AbortError') {
         const progress = state.extractProgress;
-        status('已暂停：' + progress.done + ' / ' + progress.total + ' 块已完成并保存。再次点击「从主题提炼」会从断点继续。');
+        modelStatus(task, '已暂停：' + progress.done + ' / ' + progress.total + ' 块已完成并保存。再次点击「从主题提炼」会从断点继续。');
       } else {
-        status('提炼失败：' + describeError(error), 'error');
+        modelStatus(task, '提炼失败：' + describeError(error), 'error');
       }
       closeExtractDialog();
     } finally {
       state.extracting = false;
       state.llm = null;
+      if (state.extractTask === task) state.extractTask = null;
+      finishModelTask(task);
       $('#seriesExtractPause').hidden = true;
     }
   }
@@ -1388,37 +1714,45 @@
     await runExtract({
       theme,
       seriesId: series.id,
-      onDone: result => {
-        if (result.canonDraft) applyCanonDraft(result.canonDraft, result);
-        else status('模型没有返回可用的风格草案，已保留现有圣经。可手动填写。', 'error');
+      onDone: async result => {
+        if (result.canonDraft) return applyCanonDraft(result.canonDraft, result, series.id);
+        if (isVisibleSeries(series.id)) status('模型没有返回可用的风格草案，已保留现有圣经。可手动填写。', 'error');
+        return false;
       }
     });
   }
 
-  function applyCanonDraft(draft, meta) {
-    const series = state.series;
-    const canon = series.canon;
-    for (const key of ['medium', 'lighting', 'lens', 'composition', 'grade', 'material', 'characterLook', 'atmosphere']) {
-      if (draft[key] && typeof draft[key] === 'object') Object.assign(canon[key], draft[key]);
-      else if (draft[key]) canon[key] = draft[key];
-    }
-    if (draft.palette?.length) canon.palette = draft.palette.map(item => ({ name: item.name, hex: item.hex || '#808080', weight: item.weight }));
-    if (draft.terms && Object.keys(draft.terms).length) canon.terms = { ...canon.terms, ...draft.terms };
-    if (draft.negative?.length) canon.negative = draft.negative;
-    if (draft.themes?.length) series.theme.keywords = draft.themes;
-    if (draft.mood?.length) series.theme.mood = draft.mood;
-    if (draft.era) series.theme.era = draft.era;
-    if (draft.taboos?.length) series.theme.taboos = draft.taboos;
-    series.theme.source = meta ? { used: meta.coverage.used, total: meta.coverage.total, degraded: meta.degraded.length } : null;
-    // The draft is written to disk immediately below, so this is not a pending edit.
-    series.canonDirty = false;
-    canon.version = (canon.version || 1) + 1;
-    canon.anchorSentence = Engine.renderAnchor(canon);
-    saveSeries().then(() => {
+  async function applyCanonDraft(draft, meta, seriesId) {
+    const saved = await store.updateSeries(seriesId, stored => {
+      const series = structuredClone(isCurrentSeries(seriesId) ? state.series : stored);
+      const canon = series.canon;
+      for (const key of ['medium', 'lighting', 'lens', 'composition', 'grade', 'material', 'characterLook', 'atmosphere']) {
+        if (draft[key] && typeof draft[key] === 'object') Object.assign(canon[key] ||= {}, draft[key]);
+        else if (draft[key]) canon[key] = draft[key];
+      }
+      if (draft.palette?.length) canon.palette = draft.palette.map(item => ({ name: item.name, hex: item.hex || '#808080', weight: item.weight }));
+      if (draft.terms && Object.keys(draft.terms).length) canon.terms = { ...canon.terms, ...draft.terms };
+      if (draft.negative?.length) canon.negative = draft.negative;
+      if (draft.themes?.length) series.theme.keywords = draft.themes;
+      if (draft.mood?.length) series.theme.mood = draft.mood;
+      if (draft.era) series.theme.era = draft.era;
+      if (draft.taboos?.length) series.theme.taboos = draft.taboos;
+      series.theme.source = meta ? { used: meta.coverage.used, total: meta.coverage.total, degraded: meta.degraded.length } : null;
+      // The draft is written to disk immediately below, so this is not a pending edit.
+      series.canonDirty = false;
+      canon.version = (canon.version || 1) + 1;
+      canon.anchorSentence = Engine.renderAnchor(canon);
+      series.updatedAt = Date.now();
+      return series;
+    });
+    if (!saved) return false;
+    syncSeriesRecord(saved);
+    if (isVisibleSeries(seriesId)) {
       renderCanon();
       renderHeader();
-      status('已生成圣经 v' + canon.version + '。请逐项检查，模型填充的内容都可以修改。', 'success');
-    });
+      status('已生成圣经 v' + saved.canon.version + '。请逐项检查，模型填充的内容都可以修改。', 'success');
+    }
+    return true;
   }
 
   // ---------------------------------------------------------------- split frames
@@ -1428,6 +1762,21 @@
   // The remembered selection is scoped to one series: lore ids are unique per series, so a
   // selection carried across a series switch would silently tick nothing.
   let splitSelection = { seriesId: null, ids: new Set() };
+  let splitContext = null;
+
+  function cancelSplitTask() {
+    const task = state.splitTask;
+    if (!task || task.saved || task.cancelled || task.context !== splitContext) return;
+    task.cancelled = true;
+    task.llm?.cancel();
+    modelStatus(task, '已取消本次拆帧，未完成结果不会加入大纲；已发送的请求可能计费。');
+  }
+
+  function closeSplitDialog() {
+    // Cancellation must take effect before a queued model response or close event.
+    cancelSplitTask();
+    $('#seriesSplitDialog').close();
+  }
 
   function openSplitDialog() {
     if (!requireOptimizer()) return;
@@ -1435,6 +1784,7 @@
     const lore = state.lore || [];
     const container = $('#seriesSplitLore');
     const seriesId = state.series.id;
+    splitContext = { series: structuredClone(state.series), lore: structuredClone(lore), assets: structuredClone(state.assets) };
     if (splitSelection.seriesId !== seriesId) splitSelection = { seriesId, ids: new Set(lore.map(item => item.id)) };
     const chosen = splitSelection.ids;
     container.replaceChildren(...lore.map((item, index) => {
@@ -1469,7 +1819,7 @@
 
   function updateSplitSummary() {
     const ids = selectedLoreIds();
-    const chars = state.lore.filter(item => ids.includes(item.id)).reduce((sum, item) => sum + String(item.text || '').length, 0);
+    const chars = (splitContext?.lore || []).filter(item => ids.includes(item.id)).reduce((sum, item) => sum + String(item.text || '').length, 0);
     // Plain text input: keep digits only and clamp to the supported range.
     const field = $('#seriesSplitCount');
     const digits = field.value.replace(/\D/g, '').slice(0, 2);
@@ -1480,7 +1830,7 @@
     summary.textContent = ids.length
       ? '将读取 ' + ids.length + ' 条档案（共 ' + chars + ' 字符），拆成 ' + count + ' 帧。'
       : '至少要选一条档案，才能开始拆分。';
-    $('#seriesSplitStart').disabled = !ids.length;
+    $('#seriesSplitStart').disabled = !ids.length || Boolean(state.splitTask);
     // Highlight the preset that matches the current count, if any.
     document.querySelectorAll('[data-split-count]').forEach(preset => {
       preset.setAttribute('aria-pressed', String(Number(preset.dataset.splitCount) === count));
@@ -1488,14 +1838,19 @@
   }
 
   async function runSplit() {
-    const series = state.series;
-    if (!series) return;
+    const context = splitContext;
+    const series = context?.series;
+    if (!series || state.splitTask) return;
     const ids = selectedLoreIds();
     if (!ids.length) return;
     const count = Math.max(1, Math.min(24, Number(String($('#seriesSplitCount').value).replace(/\D/g, '')) || 6));
-    const lore = state.lore.filter(item => ids.includes(item.id));
+    const lore = context.lore.filter(item => ids.includes(item.id));
     const config = optimizerConfig();
     const canonText = Engine.renderAnchor(series.canon);
+    const task = beginModelTask('split', series.id);
+    if (!task) return;
+    state.splitTask = task;
+    task.context = context;
 
     // Only the selected entries are read, and each is tagged with how many frames it should
     // contribute so a long entry does not get one frame while a short one gets five.
@@ -1513,9 +1868,11 @@
     ].join('\n');
 
     $('#seriesSplitStart').disabled = true;
-    status('正在把档案拆成 ' + count + ' 帧…');
+    $('#seriesSplitSummary').textContent = '正在拆帧。关闭对话框会取消本次拆帧，未完成结果不会加入大纲。已发送的模型请求可能计费。';
+    modelStatus(task, '正在把档案拆成 ' + count + ' 帧…');
     try {
       const llm = Llm.createSeriesLlm({ request: post, concurrency: 1 });
+      task.llm = llm;
       const result = await llm.outline({
         input,
         config,
@@ -1524,11 +1881,11 @@
         hasLore: true,
         loreTitles: lore.map(item => item.title || '')
       });
+      if (task.cancelled) return;
       if (!result.ok) throw new Error(result.errors[0] || '模型没有返回可用的帧清单');
       const byTitle = new Map(lore.map(item => [String(item.title || '').trim(), item.id]).filter(([title]) => title));
-      const existing = state.shots.length;
       const created = result.data.shots.map((item, index) => ({
-        ...newShot(existing + index),
+        ...newShot(index, series, context.assets),
         code: item.code,
         title: item.title,
         beat: item.beat,
@@ -1540,12 +1897,22 @@
         axisValues: item.axisValues,
         origin: 'split'
       }));
-      if (result.data.axes?.length && !(series.axes || []).length) {
-        series.axes = result.data.axes.map(axis => ({ id: axis.id, label: axis.label, values: axis.values }));
-        await saveSeries();
+      const saved = await store.appendShots(series.id, created, result.data.axes || [], () => !task.cancelled);
+      if (!saved.length) {
+        task.saved = true;
+        if (state.splitTask === task && splitContext === context) $('#seriesSplitDialog').close();
+        modelStatus(task, '拆帧目标已删除或任务已取消，结果已忽略。');
+        return;
       }
-      for (const shot of created) await persistShot(shot);
-      $('#seriesSplitDialog').close();
+      task.saved = true;
+      if (state.splitTask === task && splitContext === context) $('#seriesSplitDialog').close();
+      if (!isCurrentSeries(series.id)) return;
+      const fresh = await store.getSeries(series.id);
+      if (!isCurrentSeries(series.id) || !fresh) return;
+      if (!state.series.axes?.length && fresh.axes?.length) state.series.axes = fresh.axes;
+      for (const shot of saved) if (!state.shots.some(item => item.id === shot.id)) state.shots.push(shot);
+      state.shots.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      if (!isVisibleSeries(series.id)) return;
       renderShots();
       setView('outline');
       renderHeader();
@@ -1559,12 +1926,16 @@
           confirmLabel: '开始生成',
           danger: false
         });
-        if (proceed) await startBatch({ shots: created, ask: false });
+        if (proceed && isVisibleSeries(series.id)) await startBatch({ shots: saved, ask: false });
       }
     } catch (error) {
-      status('拆分失败：' + describeError(error), 'error');
+      if (!task.cancelled) modelStatus(task, '拆分失败：' + describeError(error), 'error');
     } finally {
-      $('#seriesSplitStart').disabled = false;
+      finishModelTask(task);
+      if (state.splitTask === task) {
+        state.splitTask = null;
+        updateSplitSummary();
+      }
     }
   }
 
@@ -1576,24 +1947,36 @@
       return;
     }
     const config = optimizerConfig();
-    status('正在扩写 ' + shot.code + '…');
+    const seriesId = shot.seriesId;
+    if (!isCurrentSeries(seriesId)) return;
+    const input = '系列风格：' + (Engine.renderAnchor(state.series.canon) || '未填写') + '\n这一帧：' + brief;
+    const task = beginModelTask('expand', seriesId, shot.id);
+    if (!task) return;
+    modelStatus(task, '正在扩写 ' + shot.code + '。关闭详情后任务仍会继续。');
+    renderInspector();
     try {
       const llm = Llm.createSeriesLlm({ request: post, concurrency: 1 });
-      const input = '系列风格：' + (Engine.renderAnchor(state.series.canon) || '未填写') + '\n这一帧：' + brief;
       const result = await llm.shot({ input, config, axisValues: shot.axisValues || {} });
       if (!result.ok) throw new Error(result.errors[0] || '模型没有返回可用内容');
-      Object.assign(shot, {
-        subject: result.data.subject || shot.subject,
-        action: result.data.action || shot.action,
-        scene: result.data.scene || shot.scene,
-        detail: result.data.detail || shot.detail
+      const saved = await store.updateShot(shot.id, seriesId, stored => {
+        const current = isCurrentSeries(seriesId) && state.shots.find(item => item.id === shot.id);
+        const updated = structuredClone(current || stored);
+        for (const key of ['subject', 'action', 'scene', 'detail']) if (result.data[key]) updated[key] = result.data[key];
+        updated.updatedAt = Date.now();
+        return updated;
       });
-      await persistShot(shot);
-      renderShots();
-      renderInspector();
-      status('已扩写 ' + shot.code + '，可继续修改。', 'success');
+      if (!saved) { modelStatus(task, '扩写目标已删除，结果已忽略。'); return; }
+      if (isCurrentSeries(seriesId)) {
+        const index = state.shots.findIndex(item => item.id === shot.id);
+        if (index >= 0) state.shots[index] = saved;
+      }
+      if (isVisibleSeries(seriesId)) renderShots({ updateInspector: false });
+      modelStatus(task, '已扩写 ' + shot.code + '，可继续修改。', 'success');
     } catch (error) {
-      status('扩写失败：' + describeError(error), 'error');
+      modelStatus(task, '扩写失败：' + describeError(error), 'error');
+    } finally {
+      finishModelTask(task);
+      if (isVisibleSeries(seriesId) && state.selectedShotId === shot.id) renderInspector();
     }
   }
 
@@ -1635,11 +2018,27 @@
       meta.textContent = (asset.width || '?') + '×' + (asset.height || '?') + ' · ' + bytes(asset.bytes) + (asset.original && asset.original.bytes > asset.bytes ? '（原 ' + bytes(asset.original.bytes) + '）' : '') + ' · ' + analysisState;
       const actions = el('div', 'series-gallery-actions-row');
       const analyze = button('分析', 'text-action', () => analyzeAsset(asset));
-      analyze.disabled = !hasOptimizer();
+      analyze.dataset.action = 'analyze-asset';
+      const analyzing = [...state.modelTasks.values()].some(task => task.type === 'describe' && task.targetId === asset.id);
+      analyze.disabled = !hasOptimizer() || analyzing;
+      if (analyzing) analyze.textContent = '分析中…';
+      card.dataset.assetId = asset.id;
       const useDefault = button('设为默认', 'text-action', async () => {
-        state.series.gallery.defaults[asset.role === 'output' ? 'style' : asset.role] = asset.id;
-        await saveSeries();
-        status('已设为默认' + (Engine.SLOT_LABELS[asset.role] || '') + '。新帧会自动带上这张图。', 'success');
+        const slot = asset.role === 'output' ? 'style' : asset.role;
+        if (isCurrentSeries(asset.seriesId)) {
+          state.series.gallery ||= { defaults: {} };
+          state.series.gallery.defaults ||= {};
+          state.series.gallery.defaults[slot] = asset.id;
+        }
+        const saved = await store.updateSeries(asset.seriesId, stored => {
+          const series = structuredClone(isCurrentSeries(asset.seriesId) ? state.series : stored);
+          series.gallery ||= { defaults: {} };
+          series.gallery.defaults ||= {};
+          series.gallery.defaults[slot] = asset.id;
+          return series;
+        });
+        syncSeriesRecord(saved);
+        if (isVisibleSeries(asset.seriesId)) status('已设为默认' + (Engine.SLOT_LABELS[asset.role] || '') + '。新帧会自动带上这张图。', 'success');
       });
       const remove = button('移除', 'text-action', async () => {
         const ok = await confirmAction({
@@ -1649,6 +2048,7 @@
         });
         if (!ok) return;
         await store.deleteAsset(asset.id);
+        if (!isCurrentSeries(asset.seriesId)) return;
         state.assets = state.assets.filter(item => item.id !== asset.id);
         state.shots.forEach(shot => {
           if ((shot.references || []).some(entry => entry.assetId === asset.id)) {
@@ -1672,20 +2072,22 @@
 
   async function addGalleryFiles(files) {
     if (!state.series) return;
+    const seriesId = state.series.id;
     const incoming = [...files].filter(file => ['image/png', 'image/jpeg', 'image/webp'].includes(file.type));
     if (!incoming.length) { status('只支持 PNG、JPEG、WebP 图片。', 'error'); return; }
     status('正在压缩并保存 ' + incoming.length + ' 张图片…');
+    const task = { seriesId, total: incoming.length };
+    const taskId = uid('upload');
+    state.uploads.set(taskId, task);
     let added = 0;
+    let skipped = 0;
+    const errors = [];
     for (const file of incoming) {
       try {
         const compressed = await compressImage(file);
-        if (compressed.sha256 && state.assets.some(asset => asset.sha256 === compressed.sha256)) {
-          status('「' + file.name + '」已在图库中，已跳过。');
-          continue;
-        }
         const asset = {
           id: uid('ast'),
-          seriesId: state.series.id,
+          seriesId,
           role: 'style',
           name: file.name.replace(/\.[^.]+$/, '').slice(0, 40),
           note: '',
@@ -1699,58 +2101,73 @@
           analysis: { status: 'pending' },
           createdAt: Date.now()
         };
-        await store.putAsset(asset);
-        state.assets.push(asset);
+        const saved = await store.addAssetToSeries(asset);
+        if (!saved.added) {
+          if (saved.reason === 'missing') break;
+          skipped++;
+          continue;
+        }
+        if (isCurrentSeries(seriesId) && !state.assets.some(item => item.id === asset.id)) state.assets.push(asset);
         added++;
       } catch (error) {
-        status('「' + file.name + '」处理失败：' + (error.message || '无法读取图片'), 'error');
+        errors.push('「' + file.name + '」处理失败：' + (error.message || '无法读取图片'));
       }
     }
-    renderGallery();
-    renderHeader();
-    if (added) {
-      status('已添加 ' + added + ' 张参考图。可以给每张指定角色，或直接分析。', 'success');
-      if (hasOptimizer()) analyzePending();
+    state.uploads.delete(taskId);
+    if (isVisibleSeries(seriesId)) {
+      renderGallery();
+      renderHeader();
+      const message = ['已添加 ' + added + ' 张参考图。', skipped ? skipped + ' 张重复图片已跳过。' : '', ...errors].filter(Boolean).join(' ');
+      status(message, errors.length ? 'error' : 'success');
+      if (added && hasOptimizer()) analyzePending();
     }
   }
 
-  async function analyzeAsset(asset) {
+  async function analyzeAsset(asset, context = null) {
     if (!requireOptimizer()) return;
     if (!asset?.data) return;
     const config = optimizerConfig();
-    asset.analysis = { ...(asset.analysis || {}), status: 'running' };
-    renderGallery();
+    const seriesId = asset.seriesId;
+    const task = beginModelTask('describe', seriesId, asset.id);
+    if (!task) return;
+    const request = { image: asset.data, role: asset.role === 'output' ? 'style' : asset.role, config };
+    if (isVisibleSeries(seriesId) && state.view === 'gallery') renderGallery();
     try {
+      const owner = isCurrentSeries(seriesId) ? state.series : await store.getSeries(seriesId);
+      if (!owner) return;
+      request.context = context ?? Engine.renderAnchor(owner.canon).slice(0, 800);
       const llm = Llm.createSeriesLlm({ request: post, concurrency: 1 });
-      const result = await llm.describe({
-        image: asset.data,
-        role: asset.role === 'output' ? 'style' : asset.role,
-        context: Engine.renderAnchor(state.series.canon).slice(0, 800),
-        config
-      });
+      const result = await llm.describe(request);
       if (!result.ok) throw new Error(result.errors[0] || '分析结果为空');
-      asset.analysis = { status: 'done', model: config.model, ...result.data };
-      if (!asset.note) asset.note = result.data.appearance || result.data.summary || '';
-      await store.putAsset(asset);
-      status('已分析「' + (asset.name || '参考图') + '」。可把描述写进圣经，让文本锚点也带上这些特征。', 'success');
+      const saved = await store.updateAsset(asset.id, seriesId, current => ({ ...current,
+        analysis: { status: 'done', model: config.model, ...result.data },
+        note: current.note || result.data.appearance || result.data.summary || '' }));
+      syncAssetRecord(saved);
+      modelStatus(task, saved ? '已分析「' + (saved.name || '参考图') + '」。可把描述写进圣经，让文本锚点也带上这些特征。' : '参考图已删除，分析结果已忽略。', 'success');
     } catch (error) {
-      asset.analysis = { status: 'failed', error: describeError(error) };
-      await store.putAsset(asset).catch(() => {});
-      status('分析失败：' + describeError(error), 'error');
+      const saved = await store.updateAsset(asset.id, seriesId, current => ({ ...current, analysis: { status: 'failed', error: describeError(error) } })).catch(() => null);
+      syncAssetRecord(saved);
+      modelStatus(task, '分析失败：' + describeError(error), 'error');
+    } finally {
+      finishModelTask(task);
+      const editing = $('#seriesGalleryGrid').contains(document.activeElement) && document.activeElement.matches('input,textarea,select');
+      if (isVisibleSeries(seriesId) && state.view === 'gallery' && !editing) renderGallery();
     }
-    renderGallery();
   }
 
   async function analyzePending() {
     if (state.analyzing) return;
+    if (!state.series) return;
+    const seriesId = state.series.id;
+    const context = Engine.renderAnchor(state.series.canon).slice(0, 800);
     state.analyzing = true;
     const pending = state.assets.filter(asset => asset.role !== 'output' && asset.analysis?.status !== 'done' && asset.analysis?.status !== 'running');
     for (const asset of pending) {
       if (state.analyzing === false) break;
-      await analyzeAsset(asset);
+      await analyzeAsset(asset, context);
     }
     state.analyzing = false;
-    renderGallery();
+    if (isVisibleSeries(seriesId) && state.view === 'gallery') renderGallery();
   }
 
   // ---------------------------------------------------------------- matrix
@@ -1761,31 +2178,40 @@
     const container = $('#seriesMatrix');
     const series = state.series;
     if (!series) return;
-    const { combinations, truncated } = Engine.expandMatrix(series.axes || []);
+    const { combinations, total, truncated, axes, errors } = Engine.expandMatrix(series.axes || []);
     $('#seriesMatrixEmpty').hidden = combinations.length > 0;
     const summary = $('#seriesMatrixSummary');
     if (summary) {
-      if (!combinations.length) {
+      if (errors.length) {
+        summary.textContent = errors.join(' ');
+      } else if (!combinations.length) {
         summary.textContent = '';
       } else {
-        const built = state.shots.filter(shot => Object.keys(shot.axisValues || {}).length).length;
-        summary.textContent = '共 ' + combinations.length + ' 种组合，已建 ' + built + ' 帧。每格代表"轴取值的一种搭配"。';
+        const built = new Set(state.shots.filter(shot => {
+          const entries = Object.entries(shot.axisValues || {}).filter(([, value]) => String(value || '').trim());
+          return entries.length === axes.length && axes.every(axis => axis.values.includes(String(shot.axisValues?.[axis.id] || '').trim()));
+        }).map(shot => Engine.matrixKey(shot.axisValues))).size;
+        summary.textContent = '共 ' + total + ' 种组合，已建 ' + built + ' 组。'
+          + (truncated ? '当前显示前 ' + combinations.length + ' 组。' : '') + '建帧只创建草稿，不会调用生图模型。';
       }
     }
+    $('#seriesMatrixBuild').textContent = truncated ? '建立当前前 ' + Engine.AXIS_LIMIT + ' 组帧' : '按轴展开全部帧';
+    $('#seriesMatrixBuild').disabled = Boolean(errors.length || !combinations.length);
     if (!combinations.length) { container.replaceChildren(); return; }
 
     const existing = new Map();
     for (const shot of state.shots) {
-      const key = JSON.stringify(shot.axisValues || {});
+      const key = Engine.matrixKey(shot.axisValues);
       if (!existing.has(key)) existing.set(key, shot);
     }
 
     const header = el('div', 'series-matrix-row is-head');
     header.append(el('span', 'series-matrix-cell', '轴取值组合'), el('span', 'series-matrix-cell', '状态'), el('span', 'series-matrix-cell', '操作'));
     const rows = combinations.map(combo => {
-      const key = JSON.stringify(combo);
+      const key = Engine.matrixKey(combo);
       const shot = existing.get(key);
       const row = el('div', 'series-matrix-row');
+      row.dataset.matrixKey = key;
       if (shot?.result?.assetId) row.classList.add('is-done');
       const label = el('span', 'series-matrix-cell');
       label.textContent = Object.entries(combo).map(([axisId, value]) => {
@@ -1793,53 +2219,58 @@
         return (axis?.label || axisId) + '：' + value;
       }).join(' · ');
       const stateCell = el('span', 'series-matrix-cell');
-      stateCell.textContent = shot ? (shot.result?.assetId ? '已出图' : '已建帧') : '未建帧';
+      stateCell.textContent = shot ? (shot.pendingGeneration ? '待保存' : shot.result?.assetId ? '已出图' : '已建帧') : '未建帧';
       const action = el('span', 'series-matrix-cell');
       if (shot) {
         action.append(button('查看', 'text-action', () => { setView('outline'); selectShot(shot.id); }));
       } else {
-        action.append(button('建帧', 'text-action', async () => {
-          const created = { ...newShot(state.shots.length), axisValues: combo, origin: 'matrix' };
-          const sceneAxis = (series.axes || []).find(axis => axis.id === 'scene');
-          if (sceneAxis && combo.scene) created.scene = combo.scene;
-          await persistShot(created);
-          renderMatrix();
-          renderShots();
-        }));
+        const build = button('建帧', 'text-action', () => createMatrixFrames([combo], series));
+        build.dataset.action = 'build-matrix-frame';
+        action.append(build);
       }
       row.append(label, stateCell, action);
       return row;
     });
     container.replaceChildren(header, ...rows);
     if (truncated) {
-      container.append(el('p', 'series-hint', '组合数量超过 ' + Engine.AXIS_LIMIT + '，只显示前 ' + Engine.AXIS_LIMIT + ' 组。请减少轴取值。'));
+      container.append(el('p', 'series-hint', '共 ' + total + ' 种完整组合，仅显示并可批量建立前 ' + Engine.AXIS_LIMIT + ' 组；可减少取值后再建立其他组合。'));
     }
   }
 
   async function buildMatrixFrames() {
     const series = state.series;
     if (!series) return;
-    const { combinations } = Engine.expandMatrix(series.axes || []);
+    const { combinations, errors } = Engine.expandMatrix(series.axes || []);
+    if (errors.length) { status(errors.join(' '), 'error'); return; }
     if (!combinations.length) { status('还没有可变轴。先到「圣经」里定义轴与取值。', 'error'); return; }
-    const existing = new Set(state.shots.map(shot => JSON.stringify(shot.axisValues || {})));
-    const created = [];
-    for (const combo of combinations) {
-      if (existing.has(JSON.stringify(combo))) continue;
-      const shot = { ...newShot(state.shots.length + created.length), axisValues: combo, origin: 'matrix' };
-      if (combo.scene) shot.scene = combo.scene;
-      created.push(shot);
+    await createMatrixFrames(combinations, series);
+  }
+
+  async function createMatrixFrames(combinations, series) {
+    const assets = isCurrentSeries(series.id) ? state.assets : [];
+    const candidates = combinations.map((combo, index) => ({ ...newShot(index, series, assets), axisValues: combo, origin: 'matrix' }));
+    try {
+      // The store checks ownership and deduplicates inside one transaction, even
+      // for rapid clicks or two store instances building the same combination.
+      const created = await store.appendMatrixShots(series.id, candidates);
+      if (!isCurrentSeries(series.id)) return;
+      for (const shot of created) if (!state.shots.some(item => item.id === shot.id)) state.shots.push(shot);
+      state.shots.sort((a, b) => (a.order ?? a.index ?? 0) - (b.order ?? b.index ?? 0));
+      if (isVisibleSeries(series.id)) {
+        renderMatrix();
+        renderShots({ updateInspector: false });
+        renderHeader();
+        status(created.length ? '已按轴建立 ' + created.length + ' 帧草稿，未调用生图模型。' : '当前组合都已经建过帧，未重复添加。', 'success');
+      }
+    } catch (error) {
+      if (isVisibleSeries(series.id)) status('矩阵建帧失败：' + describeError(error), 'error');
     }
-    if (!created.length) { status('所有组合都已经建过帧。'); return; }
-    for (const shot of created) await persistShot(shot);
-    renderMatrix();
-    renderShots();
-    status('已按轴展开 ' + created.length + ' 帧。', 'success');
   }
 
   // ---------------------------------------------------------------- batch
 
   function batchTargets() {
-    return state.shots.filter(shot => !shot.result?.assetId);
+    return state.shots.filter(shot => !shot.result?.assetId && !shot.pendingGeneration);
   }
 
   // `shots` overrides the default "everything without a result" selection, so a hand-picked
@@ -1848,8 +2279,11 @@
   async function startBatch({ shots = null, ask = true } = {}) {
     if (state.batch) { status('已有批次在运行。'); return; }
     const explicit = Array.isArray(shots) && shots.length > 0;
-    const targets = explicit ? shots.slice() : batchTargets();
-    if (!targets.length) { status('没有待生成的帧。'); return; }
+    const targets = explicit ? shots.filter(shot => !shot.pendingGeneration) : batchTargets();
+    if (!targets.length) {
+      status(state.shots.some(shot => shot.pendingGeneration) ? '有图片待保存，请在帧详情中重试保存，不会重新调用生图模型。' : '没有待生成的帧。');
+      return;
+    }
     const config = imageConfig();
     if (!config.apiKey || !config.model) { status('请先在「设置」中填写图片生成 API。', 'error'); return; }
     const price = Number($('#seriesBatchPrice').value);
@@ -1865,7 +2299,7 @@
       if (!proceed) return;
     }
 
-    const batch = { targets, done: 0, failed: 0, cancelled: false, paused: false, controller: new AbortController() };
+    const batch = { targets, done: 0, failed: 0, pending: 0, cancelled: false, paused: false, controller: new AbortController() };
     state.batch = batch;
     $('#seriesBatchBar').hidden = false;
     $('#seriesBatchTitle').textContent = '批量生成';
@@ -1885,18 +2319,20 @@
       await generateShot(shot);
       batch.done++;
       if (shot.status === 'failed') batch.failed++;
+      if (shot.pendingGeneration) batch.pending++;
       $('#seriesBatchProgress').textContent = batch.done + ' / ' + targets.length;
       renderBatchBar();
     }
     state.batch = null;
     $('#seriesBatchBar').hidden = false;
-    $('#seriesBatchTitle').textContent = batch.cancelled ? '批量已取消' : '批量完成';
+    $('#seriesBatchTitle').textContent = batch.cancelled ? '批量已取消' : batch.pending ? '批量结束，有图片待保存' : '批量完成';
     $('#seriesBatchProgress').textContent = batch.done + ' / ' + batch.targets.length;
     $('#seriesBatchPause').hidden = true;
     $('#seriesBatchCancel').disabled = true;
     renderSelectionBar();
     updateGalleryButtons();
-    status(batch.cancelled ? '已取消，完成 ' + batch.done + ' 帧。' : '批量完成：' + batch.done + ' 帧，失败 ' + batch.failed + ' 帧。', batch.failed ? 'error' : 'success');
+    status((batch.cancelled ? '已取消，已处理 ' + batch.done + ' 帧。' : '批量结束：已处理 ' + batch.done + ' 帧，失败 ' + batch.failed + ' 帧。')
+      + (batch.pending ? ' 其中 ' + batch.pending + ' 帧图片待保存，请在帧详情重试保存。' : ''), batch.failed ? 'error' : batch.pending ? 'info' : 'success');
     // Only auto-hide if no new batch started in the meantime.
     setTimeout(() => {
       if (state.batch) return;
@@ -2015,9 +2451,8 @@
     await openSeries(series.id);
 
     if (copied) {
-      for (const [index, item] of copied.shots.entries()) {
-        const shot = {
-          ...newShot(index),
+      const shots = copied.shots.map((item, index) => ({
+          ...newShot(index, series, []),
           code: item.code || 'S' + String(index + 1).padStart(2, '0'),
           title: item.title || '',
           beat: item.beat || '',
@@ -2027,15 +2462,17 @@
           detail: item.detail || '',
           axisValues: item.axisValues || {},
           origin: 'template'
-        };
-        await persistShot(shot);
-      }
+        }));
+      const saved = await store.appendShots(series.id, shots);
+      if (!isVisibleSeries(series.id)) return;
+      state.shots.push(...saved.filter(shot => !state.shots.some(item => item.id === shot.id)));
       renderShots();
       setView('canon');
       status('已用「' + template.title + '」模板创建系列：' + copied.shots.length + ' 帧已建好。请先替换主题与角色设定。', 'success');
       return;
     }
 
+    if (!isVisibleSeries(series.id)) return;
     setView(theme.trim() ? 'canon' : 'outline');
     if (theme.trim()) {
       if (hasOptimizer()) {
@@ -2043,8 +2480,11 @@
           theme,
           seriesId: series.id,
           onDone: result => {
-            if (result.canonDraft) applyCanonDraft(result.canonDraft, result);
-            setView('canon');
+            if (result.canonDraft) return applyCanonDraft(result.canonDraft, result, series.id).then(applied => {
+              if (applied && isVisibleSeries(series.id)) setView('canon');
+              return applied;
+            });
+            return false;
           }
         });
       } else {
@@ -2118,7 +2558,10 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: value })
     });
-    if (!response.ok) throw new Error('图片链接可能已过期');
+    if (!response.ok) {
+      const error = await response.json().catch(() => null);
+      throw new Error(error?.error?.message || error?.error || '图片下载失败，链接可能已过期');
+    }
     return response.blob();
   }
 
@@ -2158,17 +2601,20 @@
           sha256: compressed.sha256,
           createdAt: Date.now()
         };
-        await store.putAsset(asset);
-        state.assets.push(asset);
+        const inserted = await store.addAssetToSeries(asset, { deduplicate: false });
+        if (!inserted.added) break;
+        syncAssetRecord(asset);
         if (!firstAssetId) firstAssetId = asset.id;
         const shot = {
-          ...newShot(index),
+          ...newShot(index, series, []),
           title: String(item.prompt || '未命名帧').slice(0, 24),
           origin: 'gallery',
           status: 'done',
           result: { assetId: asset.id, drift: 0 }
         };
-        await persistShot(shot);
+        const saved = await store.appendShots(series.id, [shot]);
+        if (!saved.length) break;
+        if (isCurrentSeries(series.id)) state.shots.push(...saved.filter(item => !state.shots.some(current => current.id === item.id)));
         added++;
       } catch (error) {
         failures.push((index + 1) + ': ' + (error.message || '无法读取'));
@@ -2179,21 +2625,22 @@
       // Do not leave an empty series behind when every image failed to import.
       await store.deleteSeries(series.id).catch(() => {});
       await loadSeriesList();
-      if (previousId) await openSeries(previousId).catch(() => {});
-      else closeSeries();
-      status('没有可导入的图片。' + (failures.length ? '首个错误：' + failures[0] : ''), 'error');
+      if (isCurrentSeries(series.id)) {
+        if (previousId) await openSeries(previousId).catch(() => {});
+        else closeSeries();
+        status('没有可导入的图片。' + (failures.length ? '首个错误：' + failures[0] : ''), 'error');
+      }
       return;
     }
     // The first imported work becomes the default style anchor for new frames.
     // openSeries() replaced state.series with a fresh copy, so patch that object.
     if (firstAssetId) {
-      await saveSeries({
-        gallery: {
-          ...state.series.gallery,
-          defaults: { ...(state.series.gallery?.defaults || {}), style: firstAssetId }
-        }
-      });
+      const saved = await store.updateSeries(series.id, current => ({ ...current,
+        gallery: { ...current.gallery, defaults: { ...(current.gallery?.defaults || {}), style: firstAssetId } }
+      }));
+      syncSeriesRecord(saved);
     }
+    if (!isCurrentSeries(series.id)) return;
     renderShots();
     setView('outline');
     status('已用 ' + added + ' 张作品创建系列「' + name + '」，第一张已设为默认风格锚点。', 'success');
@@ -2249,8 +2696,8 @@
     $('#seriesGuideAddShot').addEventListener('click', addNewShot);
     $('#seriesGuideSuggest').addEventListener('click', openSplitDialog);
     // Split dialog.
-    $('#seriesSplitClose').addEventListener('click', () => $('#seriesSplitDialog').close());
-    $('#seriesSplitCancel').addEventListener('click', () => $('#seriesSplitDialog').close());
+    $('#seriesSplitClose').addEventListener('click', closeSplitDialog);
+    $('#seriesSplitCancel').addEventListener('click', closeSplitDialog);
     $('#seriesSplitStart').addEventListener('click', runSplit);
     $('#seriesSplitCount').addEventListener('input', updateSplitSummary);
     $('#seriesSplitSelectAll').addEventListener('click', () => {
@@ -2324,12 +2771,25 @@
     // Pause stops the current run; completed chunks are already cached, so clicking
     // "从主题提炼" again resumes from the breakpoint instead of re-paying for them.
     $('#seriesExtractPause').addEventListener('click', () => {
-      state.llm?.cancel();
       closeExtractDialog();
     });
     $('#seriesExtractClose').addEventListener('click', () => {
-      state.llm?.cancel();
       closeExtractDialog();
+    });
+    $('#seriesExtractDialog').addEventListener('close', () => {
+      const task = state.extractTask;
+      if (!task) return;
+      task.cancelled = true;
+      task.llm?.cancel();
+      modelStatus(task, '已暂停提炼，已完成的分块保留。再次提炼可继续；已发送的请求可能计费。');
+    });
+    $('#seriesSplitDialog').addEventListener('cancel', event => {
+      event.preventDefault();
+      closeSplitDialog();
+    });
+    $('#seriesSplitDialog').addEventListener('close', () => {
+      // A close event from an earlier opening must not cancel a newly opened task.
+      if (!$('#seriesSplitDialog').open) cancelSplitTask();
     });
 
     // Esc closes the confirm dialog; the close event resolves the pending promise either way.
@@ -2361,12 +2821,16 @@
       initialized = true;
       bind();
       await loadSeriesList();
-      if (!state.series && state.list.length) await openSeries(state.list[0].id);
+      if (!state.series && !state.openRequest && state.list.length) await openSeries(state.list[0].id);
     } else {
       await loadSeriesList();
       if (state.series) {
-        const fresh = await store.getSeries(state.series.id);
-        if (!fresh) closeSeries();
+        const seriesId = state.series.id;
+        const fresh = await store.getSeries(seriesId);
+        if (isCurrentSeries(seriesId)) {
+          if (!fresh) closeSeries();
+          else renderAll();
+        }
       }
     }
   }

@@ -290,6 +290,7 @@
     function albumRow(group, index) {
       const card = document.createElement('article');
       card.className = 'gallery-set';
+      card.dataset.testid = 'gallery-series-set';
       card.dataset.seriesId = group.id;
       card._group = group;
       card._index = index;
@@ -300,6 +301,7 @@
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'gallery-set-toggle';
+      toggle.dataset.action = 'toggle-series-set';
       toggle.setAttribute('aria-expanded', 'false');
       toggle.setAttribute('aria-controls', sheetId);
 
