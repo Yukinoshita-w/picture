@@ -545,7 +545,7 @@
     }
     function render() {
       $('#galleryTotal').textContent = String(items.length).padStart(2, '0');
-      $('#galleryEmpty').hidden = Boolean(items.length);
+      $('#galleryEmpty').hidden = Boolean(items.length) || view === 'board';
       // The chronological heading and its sort control only make sense once standalone
       // works exist; an all-series gallery is browsed through the shelf instead.
       const corridorToolbar = document.querySelector('.corridor-toolbar');
@@ -555,10 +555,15 @@
       timeline(); restoreExpanded(); selectionUI(); drawSlide();
     }
     function setView(value) {
+      if (!['corridor', 'cinema', 'board'].includes(value)) return;
       view = value; pause();
       document.querySelectorAll('[data-gallery-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.galleryView === view)));
       $('#galleryCorridor').hidden = !items.length || view !== 'corridor';
       $('#galleryCinema').hidden = !items.length || view !== 'cinema';
+      $('#galleryEmpty').hidden = Boolean(items.length) || view === 'board';
+      $('#galleryBoard').hidden = view !== 'board';
+      document.querySelector('.gallery-navigation').classList.toggle('is-board-view', view === 'board');
+      window.GalleryWhiteboard?.setVisible(visible && view === 'board');
       drawSlide();
     }
     function pause() {
@@ -651,7 +656,13 @@
     });
     return {
       submitButton, init: load,
-      setVisible(value) { visible = value; if (value) load(); else pause(); },
+      setVisible(value) { visible = value; if (value) load(); else pause(); window.GalleryWhiteboard?.setVisible(value && view === 'board'); },
+      // Stable read interface for the whiteboard; callers never depend on gallery DOM.
+      async listArtworks() {
+        await queue;
+        const records = await store('readonly', storage => storage.getAll());
+        return records.filter(item => safeImageSource(item.src)).sort((a, b) => b.created - a.created);
+      },
       // Used by the series workspace: batch import, membership checks and a manual refresh.
       submit, submitMany,
       contains: id => items.some(item => item.id === id),

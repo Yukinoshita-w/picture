@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/styles-responsive.css">
   <link rel="stylesheet" href="/gallery.css">
+  <link rel="stylesheet" href="/whiteboard.css">
 </head>
 <body>
   <header class="site-header">
@@ -497,6 +498,7 @@
         <div class="gallery-view-switch" role="group" aria-label="画廊展示方式">
           <button type="button" data-gallery-view="corridor" aria-pressed="true">作品走廊</button>
           <button type="button" data-gallery-view="cinema" aria-pressed="false">沉浸放映</button>
+          <button type="button" data-gallery-view="board" aria-pressed="false">自由白板</button>
         </div>
         <span class="gallery-selection-count" id="gallerySelectionCount">已选 0 件</span>
         <div class="gallery-nav-tools">
@@ -569,7 +571,81 @@
         </div>
       </section>
 
-      <footer class="gallery-footer"><span>Prompt Studio / Personal Gallery</span><span>作品独立保存在当前浏览器，清除浏览器数据会移除收藏。</span></footer>
+      <section id="galleryBoard" class="whiteboard" hidden aria-label="图片展示白板" aria-busy="false">
+        <div class="wb-document-bar">
+          <div class="wb-document-heading"><span class="section-label">Free Canvas</span><h2>把画面连成想法<em>。</em></h2></div>
+          <div class="wb-document-controls">
+            <label class="visually-hidden" for="wbBoardList">选择白板</label><select id="wbBoardList" aria-label="选择白板"></select>
+            <button type="button" id="wbNew">新建白板</button>
+            <button type="button" id="wbDeleteBoard" class="wb-danger">删除白板</button>
+          </div>
+        </div>
+        <div class="wb-toolbar" role="toolbar" aria-label="白板工具">
+          <div class="wb-tool-group" role="group" aria-label="操作模式">
+            <button type="button" id="wbSelect" data-wb-mode="select" aria-pressed="true" title="选择与移动（V）">↖ 选择</button>
+            <button type="button" id="wbConnect" data-wb-mode="connect" aria-pressed="false" title="从图片或连接点拖向另一张图片（C）">↗ 连线</button>
+            <button type="button" id="wbPan" data-wb-mode="pan" aria-pressed="false" title="拖动画布（H）">✥ 平移</button>
+            <button type="button" id="wbPin" data-wb-mode="pin" aria-pressed="false" title="点击图片添加固定连接点（P）">⊕ 打点</button>
+          </div>
+          <div class="wb-tool-group wb-edit-tools">
+            <button type="button" id="wbAddNode">＋ 空节点</button>
+            <button type="button" id="wbUndo" disabled title="撤销（Ctrl / ⌘ Z）">↶</button>
+            <button type="button" id="wbRedo" disabled title="重做（Ctrl / ⌘ Shift Z）">↷</button>
+          </div>
+          <div class="wb-tool-group wb-view-tools">
+            <button type="button" id="wbZoomOut" aria-label="缩小白板">−</button><span id="wbZoom" class="wb-zoom">100%</span><button type="button" id="wbZoomIn" aria-label="放大白板">＋</button>
+            <button type="button" id="wbFit">适应画面</button>
+            <button type="button" id="wbPresent" aria-pressed="false">展示</button>
+            <button type="button" id="wbFullscreen">全屏</button>
+          </div>
+          <div class="wb-export-group">
+            <select id="wbExportType" aria-label="白板导出格式"><option value="png">PNG 图片</option><option value="svg">SVG 图片</option><option value="json">白板备份</option></select>
+            <button type="button" id="wbExport">导出 ↗</button>
+            <button type="button" id="wbImport" class="wb-edit-tools">导入</button><input id="wbImportFile" type="file" accept=".json,application/json" hidden>
+          </div>
+        </div>
+        <div class="wb-layout">
+          <aside class="wb-library" aria-label="白板图片库">
+            <div class="wb-panel-heading"><h3>画廊作品</h3><button type="button" id="wbUpload">上传图片</button><input id="wbUploadFile" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden></div>
+            <label class="visually-hidden" for="wbSearch">搜索画廊作品</label><input id="wbSearch" class="wb-search" type="search" placeholder="搜索作品或系列…">
+            <p class="wb-panel-hint">点击或拖入画布。选中空节点后点击图片即可填入。</p>
+            <div id="wbLibrary" class="wb-library-grid"></div>
+            <p id="wbLibraryEmpty" class="wb-empty-library" hidden>画廊还没有作品。可以先上传图片，或在创作页生成并提交画廊。</p>
+          </aside>
+          <div class="wb-stage-wrap">
+            <div id="wbCanvas" class="wb-canvas" tabindex="0" role="region" aria-label="白板画布，V 选择，C 连线，H 平移，P 打点，Delete 删除选中元素"></div>
+            <div id="wbCanvasEmpty" class="wb-canvas-empty"><span aria-hidden="true">＋</span><h3>给灵感一个位置</h3><p>从左侧选一张图片，或添加空节点。<br>切换“连线”，将不同画面自由相连。</p></div>
+            <div class="wb-canvas-help" id="wbModeHint">拖动图片移动 · Shift 框选 · 滚轮缩放 · 中键拖动画布</div>
+          </div>
+          <aside class="wb-inspector" aria-label="白板元素属性">
+            <label class="wb-field">白板名称<input id="wbTitle" maxlength="80" placeholder="未命名白板"></label>
+            <div id="wbNoSelection" class="wb-inspector-empty"><span class="section-label">Your Composition</span><p>选中图片或连线，在这里调整内容。</p><p>双击图片可查看大图；双击空节点可选择图片。</p></div>
+            <div id="wbNodeProperties" hidden>
+              <h3>图片节点</h3>
+              <label class="wb-check"><input id="wbNodeFrame" type="checkbox">显示图片边框</label>
+              <label class="wb-field">自定义标题<input id="wbNodeTitle" maxlength="120" placeholder="留空不显示文字"></label>
+              <button type="button" id="wbReplace">选择 / 替换图片</button>
+              <button type="button" id="wbPreview">查看大图 ↗</button>
+              <div class="wb-property-actions"><button type="button" id="wbDuplicate">复制节点</button><button type="button" id="wbFront">置于顶层</button><button type="button" id="wbClearPins">清除连接点</button></div>
+              <p class="wb-panel-hint">切换“打点”后点击图片添加空心圆环，再切换“连线”从圆环拉线。圆环仅在这两种模式显示，选择、展示和导出时隐藏。</p>
+            </div>
+            <div id="wbEdgeProperties" hidden>
+              <h3>关系连线</h3>
+              <label class="wb-field">说明<input id="wbEdgeLabel" maxlength="200" placeholder="例如：同一角色 / 灵感来源"></label>
+              <label class="wb-field">颜色<input id="wbEdgeColor" type="color" value="#786954"></label>
+              <label class="wb-field">粗细<select id="wbEdgeWidth"><option value="1">细</option><option value="2" selected>标准</option><option value="4">粗</option></select></label>
+              <label class="wb-check"><input id="wbEdgeArrow" type="checkbox">显示箭头</label>
+              <label class="wb-check"><input id="wbEdgeDashed" type="checkbox">虚线</label>
+              <p class="wb-panel-hint">连线为直线，位于图片下方。选中连线后拖动两端可重新连接。</p>
+            </div>
+            <button type="button" id="wbRemove" class="wb-danger" hidden>删除选中元素</button>
+          </aside>
+        </div>
+        <div class="wb-footer"><span id="wbStats">0 张图片 · 0 条连线</span><span id="wbSaveState" role="status" aria-live="polite">正在加载白板…</span><button type="button" id="wbRetrySave" hidden>重试保存</button></div>
+        <p id="wbStatus" class="wb-status" role="status" aria-live="polite" hidden></p>
+      </section>
+
+      <footer class="gallery-footer"><span>Prompt Studio / Personal Gallery</span><span>作品与白板独立保存在当前浏览器，清除浏览器数据会移除收藏。</span></footer>
     </div>
   </section>
 
@@ -744,6 +820,7 @@
   </dialog>
 
   <script src="/gallery.js"></script>
+  <script src="/whiteboard-loader.js"></script>
   <script src="/style-templates.js"></script>
   <script src="/model-capabilities.js"></script>
   <script src="/generation-requirements.js"></script>

@@ -4,11 +4,20 @@
   "private": true,
   "description": "A usable OpenAI-compatible image generation web app.",
   "scripts": {
+    "build": "node scripts/build-whiteboard.js",
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node --test tests/server.test.js tests/optimizer.test.js tests/series-engine.test.js tests/series-llm.test.js tests/series-drift.test.js tests/series-server.test.js"
+    "test": "node --test tests/server.test.js tests/optimizer.test.js tests/series-engine.test.js tests/series-llm.test.js tests/series-drift.test.js tests/series-server.test.js checks/whiteboard.test.cjs",
+    "test:whiteboard": "node --test checks/whiteboard.test.cjs && python checks/whiteboard_smoke.py"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@antv/x6": "3.1.8",
+    "tslib": "2.8.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
   }
 }

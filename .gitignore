@@ -5,3 +5,5 @@ node_modules/
 test-results/
 tests/
 PLAN.md
+docs/
+checks/__pycache__/
