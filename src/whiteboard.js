@@ -61,6 +61,7 @@ export async function createWhiteboard({ gallery }) {
     $('#wbUndo').disabled = !editable() || !history?.canUndo();
     $('#wbRedo').disabled = !editable() || !history?.canRedo();
     for (const button of root.querySelectorAll('[data-wb-mode]')) button.disabled = blocked;
+    updateNodeSize();
   }
   function updateStats() {
     if (!graph) return;
@@ -156,8 +157,10 @@ export async function createWhiteboard({ gallery }) {
     };
   }
   function decorateEdge(edge) {
-    const config = edgeConfiguration(edge.getData());
+    const { labels, ...config } = edgeConfiguration(edge.getData());
     edge.prop(config, { transient: true });
+    // prop() merges arrays, so [] alone leaves an old label on the canvas.
+    edge.setLabels(labels, { transient: true });
   }
   function addNode(config = {}) {
     if (graph.getNodes().length >= LIMITS.nodes) throw new Error('一个白板最多支持 ' + LIMITS.nodes + ' 个节点。');
@@ -172,14 +175,33 @@ export async function createWhiteboard({ gallery }) {
   }
   function select(cell) {
     graph.resetSelection(cell ? [cell] : []);
-    if (cell?.isNode() && mode === 'select' && !presenting) transform.createWidget(cell);
     canvas.focus({ preventScroll: true });
+  }
+  function updateNodeSize() {
+    const node = selectedCell?.isNode() ? selectedCell : null;
+    const { width, height } = node ? node.size() : { width: 0, height: 0 };
+    $('#wbNodeSize').textContent = node ? Math.round(width) + ' × ' + Math.round(height) : '';
+    const blocked = !editable() || mode !== 'select' || !node;
+    $('#wbNodeShrink').disabled = blocked || Math.min(width, height) <= LIMITS.nodeMinSize + 0.01;
+    $('#wbNodeEnlarge').disabled = blocked || Math.max(width, height) >= LIMITS.nodeMaxSize - 0.01;
+  }
+  function scaleSelectedNode(factor) {
+    if (!editable() || mode !== 'select' || !selectedCell?.isNode()) return;
+    const node = selectedCell, { width, height } = node.size(), { x, y } = node.position();
+    const scale = Math.max(LIMITS.nodeMinSize / Math.min(width, height), Math.min(LIMITS.nodeMaxSize / Math.max(width, height), factor));
+    if (Math.abs(scale - 1) < 1e-8) return;
+    graph.batchUpdate('scale-image', () => {
+      node.resize(width * scale, height * scale);
+      node.position(x + width * (1 - scale) / 2, y + height * (1 - scale) / 2);
+    });
   }
   function updateInspector() {
     if (!graph) return;
     for (const edge of graph.getEdges()) if (edge.hasTools()) edge.removeTools({ transient: true });
-    const chosen = graph.getSelectedCells();
+    const chosen = graph.getSelectedCells().filter(cell => graph.hasCell(cell.id));
     selectedCell = chosen.length === 1 ? chosen[0] : null;
+    transform.clearWidgets();
+    if (selectedCell?.isNode() && mode === 'select' && !presenting && graph.findViewByCell(selectedCell)) transform.createWidget(selectedCell);
     $('#wbNoSelection').hidden = chosen.length > 0;
     $('#wbNodeProperties').hidden = !selectedCell?.isNode();
     $('#wbEdgeProperties').hidden = !selectedCell?.isEdge();
@@ -193,6 +215,7 @@ export async function createWhiteboard({ gallery }) {
     } else if (selectedCell?.isEdge()) {
       const data = { ...defaults, ...selectedCell.getData() };
       $('#wbEdgeLabel').value = data.label;
+      $('#wbClearEdgeLabel').disabled = !data.label;
       $('#wbEdgeColor').value = data.color;
       $('#wbEdgeWidth').value = String(data.width);
       $('#wbEdgeArrow').checked = data.arrow;
@@ -211,7 +234,7 @@ export async function createWhiteboard({ gallery }) {
     canvas.dataset.mode = value;
     for (const button of root.querySelectorAll('[data-wb-mode]')) button.setAttribute('aria-pressed', String(button.dataset.wbMode === value));
     const hints = {
-      select: '拖动图片移动 · Shift 框选 · 滚轮缩放 · 中键拖动画布',
+      select: '拖动图片移动 · 拖动四角缩放图片 · Shift 框选 · 滚轮缩放画布',
       connect: '从空心圆环拖向另一张图片或连接点 · 直线位于图片下方 · 切回选择隐藏圆环',
       pan: '拖动画布平移 · 滚轮缩放 · 点击“适应画面”查看全部',
       pin: '点击图片添加空心圆环连接点 · 切换“连线”从圆环拉线 · 选择与展示时自动隐藏'
@@ -251,9 +274,15 @@ export async function createWhiteboard({ gallery }) {
     });
     history = new History({ stackSize: 100, beforeAddCommand: (_event, args) => !loading && !args.options?.transient });
     selection = new Selection({ enabled: true, multiple: true, rubberband: true, modifiers: ['shift'], showNodeSelectionBox: false, showEdgeSelectionBox: false });
-    transform = new Transform({ resizing: { enabled: true, minWidth: 120, minHeight: 100, preserveAspectRatio: true }, rotating: false });
+    transform = new Transform({ resizing: {
+      enabled: true, preserveAspectRatio: true, allowReverse: false,
+      minWidth: node => Math.max(LIMITS.nodeMinSize, LIMITS.nodeMinSize * node.size().width / node.size().height),
+      minHeight: node => Math.max(LIMITS.nodeMinSize, LIMITS.nodeMinSize * node.size().height / node.size().width),
+      maxWidth: node => Math.min(LIMITS.nodeMaxSize, LIMITS.nodeMaxSize * node.size().width / node.size().height),
+      maxHeight: node => Math.min(LIMITS.nodeMaxSize, LIMITS.nodeMaxSize * node.size().height / node.size().width)
+    }, rotating: false });
     graph.use(history).use(selection).use(transform).use(new Snapline({ enabled: true })).use(new Clipboard({ enabled: true })).use(new Export());
-    graph.on('node:change:size', ({ node }) => decorateNode(node));
+    graph.on('node:change:size', ({ node }) => { decorateNode(node); updateNodeSize(); });
     graph.on('node:change:data', ({ node }) => decorateNode(node));
     graph.on('edge:change:data', ({ edge }) => decorateEdge(edge));
     // X6 temporarily raises a reconnecting edge; enforce the image-first paint order
@@ -278,6 +307,12 @@ export async function createWhiteboard({ gallery }) {
       if (node.getData()?.assetId) await previewNode(node);
       else if (editable()) openPicker(node);
     }));
+    graph.on('edge:dblclick', ({ edge }) => {
+      if (!editable()) return;
+      setMode('select'); select(edge); updateInspector();
+      const input = $('#wbEdgeLabel');
+      input.scrollIntoView({ block: 'nearest' }); input.focus({ preventScroll: true }); input.select();
+    });
     graph.on('edge:connected', ({ edge }) => { if (!loading) { decorateEdge(edge); markDirty(); } });
     graph.on('scale', () => { updateStats(); markDirty(); });
     graph.on('translate', () => markDirty());
@@ -506,6 +541,8 @@ export async function createWhiteboard({ gallery }) {
   function edgeChanged() {
     if (!editable() || !selectedCell?.isEdge()) return;
     const data = { label: $('#wbEdgeLabel').value, color: $('#wbEdgeColor').value, line: 'straight', width: Number($('#wbEdgeWidth').value), arrow: $('#wbEdgeArrow').checked, dashed: $('#wbEdgeDashed').checked };
+    $('#wbClearEdgeLabel').disabled = !data.label;
+    if (Object.entries(data).every(([key, value]) => selectedCell.getData()?.[key] === value)) return;
     Object.assign(defaults, data, { label: '' }); selectedCell.setData(data, { overwrite: true }); markDirty();
   }
   function fit() { if (graph.getCells().length) graph.zoomToFit({ padding: 50, maxScale: 1.2 }); else { graph.zoomTo(1); graph.translate(0, 0); } }
@@ -561,9 +598,16 @@ export async function createWhiteboard({ gallery }) {
   listen('wbSearch', () => renderLibrary(), 'input');
   listen('wbReplace', () => { if (selectedCell?.isNode()) openPicker(selectedCell); });
   listen('wbPreview', () => selectedCell?.isNode() && previewNode(selectedCell));
+  listen('wbNodeShrink', () => scaleSelectedNode(1 / 1.2));
+  listen('wbNodeEnlarge', () => scaleSelectedNode(1.2));
   listen('wbNodeTitle', () => { if (editable() && selectedCell?.isNode()) selectedCell.setData({ ...selectedCell.getData(), caption: $('#wbNodeTitle').value }); }, 'change');
   listen('wbNodeFrame', () => { if (editable() && selectedCell?.isNode()) selectedCell.setData({ ...selectedCell.getData(), framed: $('#wbNodeFrame').checked }); }, 'change');
   for (const id of ['wbEdgeLabel', 'wbEdgeColor', 'wbEdgeWidth', 'wbEdgeArrow', 'wbEdgeDashed']) listen(id, edgeChanged, 'change');
+  listen('wbEdgeLabel', edgeChanged, 'input');
+  listen('wbClearEdgeLabel', () => {
+    if (!editable() || !selectedCell?.isEdge()) return;
+    $('#wbEdgeLabel').value = ''; edgeChanged(); $('#wbEdgeLabel').focus();
+  });
   listen('wbRemove', removeSelected); listen('wbDuplicate', duplicate);
   listen('wbFront', () => { if (editable() && selectedCell) selectedCell.toFront(); });
   listen('wbClearPins', () => {

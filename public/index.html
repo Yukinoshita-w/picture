@@ -615,13 +615,17 @@
           <div class="wb-stage-wrap">
             <div id="wbCanvas" class="wb-canvas" tabindex="0" role="region" aria-label="白板画布，V 选择，C 连线，H 平移，P 打点，Delete 删除选中元素"></div>
             <div id="wbCanvasEmpty" class="wb-canvas-empty"><span aria-hidden="true">＋</span><h3>给灵感一个位置</h3><p>从左侧选一张图片，或添加空节点。<br>切换“连线”，将不同画面自由相连。</p></div>
-            <div class="wb-canvas-help" id="wbModeHint">拖动图片移动 · Shift 框选 · 滚轮缩放 · 中键拖动画布</div>
+            <div class="wb-canvas-help" id="wbModeHint">拖动图片移动 · 拖动四角缩放图片 · Shift 框选 · 滚轮缩放画布</div>
           </div>
           <aside class="wb-inspector" aria-label="白板元素属性">
             <label class="wb-field">白板名称<input id="wbTitle" maxlength="80" placeholder="未命名白板"></label>
             <div id="wbNoSelection" class="wb-inspector-empty"><span class="section-label">Your Composition</span><p>选中图片或连线，在这里调整内容。</p><p>双击图片可查看大图；双击空节点可选择图片。</p></div>
             <div id="wbNodeProperties" hidden>
               <h3>图片节点</h3>
+              <div class="wb-field">图片大小 <output id="wbNodeSize" aria-live="polite"></output>
+                <div class="wb-property-actions"><button type="button" id="wbNodeShrink" title="等比例缩小图片">− 缩小</button><button type="button" id="wbNodeEnlarge" title="等比例放大图片">＋ 放大</button></div>
+              </div>
+              <p class="wb-panel-hint">选中图片后拖动四角，可等比例自由放大、缩小。</p>
               <label class="wb-check"><input id="wbNodeFrame" type="checkbox">显示图片边框</label>
               <label class="wb-field">自定义标题<input id="wbNodeTitle" maxlength="120" placeholder="留空不显示文字"></label>
               <button type="button" id="wbReplace">选择 / 替换图片</button>
@@ -631,12 +635,13 @@
             </div>
             <div id="wbEdgeProperties" hidden>
               <h3>关系连线</h3>
-              <label class="wb-field">说明<input id="wbEdgeLabel" maxlength="200" placeholder="例如：同一角色 / 灵感来源"></label>
+              <label class="wb-field">连线文字<input id="wbEdgeLabel" maxlength="200" placeholder="输入文字，留空不显示"></label>
+              <button type="button" id="wbClearEdgeLabel">清空连线文字</button>
               <label class="wb-field">颜色<input id="wbEdgeColor" type="color" value="#786954"></label>
               <label class="wb-field">粗细<select id="wbEdgeWidth"><option value="1">细</option><option value="2" selected>标准</option><option value="4">粗</option></select></label>
               <label class="wb-check"><input id="wbEdgeArrow" type="checkbox">显示箭头</label>
               <label class="wb-check"><input id="wbEdgeDashed" type="checkbox">虚线</label>
-              <p class="wb-panel-hint">连线为直线，位于图片下方。选中连线后拖动两端可重新连接。</p>
+              <p class="wb-panel-hint">双击连线可编辑文字，清空文字会保留连线。连线为直线，位于图片下方；拖动两端可重新连接。</p>
             </div>
             <button type="button" id="wbRemove" class="wb-danger" hidden>删除选中元素</button>
           </aside>

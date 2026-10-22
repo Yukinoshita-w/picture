@@ -1,6 +1,6 @@
 export const FORMAT = 'prompt-studio-whiteboard';
 export const VERSION = 1;
-export const LIMITS = { nodes: 1000, edges: 3000, imageBytes: 20 * 1024 * 1024, packageBytes: 160 * 1024 * 1024 };
+export const LIMITS = { nodes: 1000, edges: 3000, nodeMinSize: 24, nodeMaxSize: 4000, imageBytes: 20 * 1024 * 1024, packageBytes: 160 * 1024 * 1024 };
 export const uid = prefix => prefix + '_' + crypto.randomUUID();
 const number = (value, fallback, min, max) => Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
 const text = (value, max = 200) => typeof value === 'string' ? value.slice(0, max) : '';
@@ -21,7 +21,7 @@ export function validateBoard(input) {
   };
   const nodes = input.nodes.map(item => ({
     id: id(item.id), x: number(item.x, 0, -1000000, 1000000), y: number(item.y, 0, -1000000, 1000000),
-    width: number(item.width, 260, 120, 4000), height: number(item.height, 210, 100, 4000),
+    width: number(item.width, 260, LIMITS.nodeMinSize, LIMITS.nodeMaxSize), height: number(item.height, 210, LIMITS.nodeMinSize, LIMITS.nodeMaxSize),
     title: text(item.title, 120), assetId: text(item.assetId, 180), zIndex: number(item.zIndex, 1, -10000, 10000),
     // Legacy title contained the generation prompt. Only an explicitly authored
     // caption is displayed, so old boards also reopen as clean images.

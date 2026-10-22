@@ -46,6 +46,15 @@ test('whiteboard supports cycles, multiple relationships and relative image pins
   assert.deepEqual(saved.nodes[0].pins[0], { id: 'pin', x: 0.3, y: 0.7 });
 });
 
+test('small and large image sizes survive save and backup roundtrips', async () => {
+  const { createBoard, validateBoard, validatePackage, FORMAT, VERSION } = await model;
+  const board = createBoard();
+  board.nodes = [{ id: 'small', width: 48, height: 24 }, { id: 'large', width: 4000, height: 2250 }];
+  const saved = validateBoard(board);
+  const restored = validatePackage(JSON.parse(JSON.stringify({ format: FORMAT, version: VERSION, board: saved, assets: [] })));
+  assert.deepEqual(restored.board.nodes.map(({ width, height }) => ({ width, height })), board.nodes.map(({ width, height }) => ({ width, height })));
+});
+
 test('older curved and routed connections reopen as straight lines without changing endpoints', async () => {
   const { createBoard, validateBoard } = await model;
   const board = createBoard();
@@ -76,7 +85,7 @@ test('whiteboard clamps malformed dimensions and rejects executable image format
   const { createBoard, validateBoard, validatePackage, FORMAT, VERSION } = await model;
   const board = createBoard(); board.nodes = [{ id: 'a', assetId: 'image', x: Infinity, width: -1, height: 10000 }];
   const node = validateBoard(board).nodes[0];
-  assert.equal(node.x, 0); assert.equal(node.width, 120); assert.equal(node.height, 4000);
+  assert.equal(node.x, 0); assert.equal(node.width, 24); assert.equal(node.height, 4000);
   const wrap = assets => ({ format: FORMAT, version: VERSION, board, assets });
   assert.throws(() => validatePackage(wrap([])), /缺少/);
   assert.throws(() => validatePackage(wrap([{ id: 'image', data: 'data:image/svg+xml;base64,PHN2Zz4=' }])), /无效/);

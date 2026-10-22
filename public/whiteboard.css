@@ -65,6 +65,8 @@
 .wb-canvas .x6-edge-selected .x6-edge-path { stroke: var(--accent); }
 .wb-canvas .x6-widget-selection-box { border-color: var(--accent); }
 .wb-canvas .x6-widget-transform { border-color: var(--accent); }
+.wb-canvas .x6-widget-transform-resize { width: 14px; height: 14px; margin: -2px; border: 2px solid var(--accent); background: var(--paper-raised); touch-action: none; }
+.wb-canvas .x6-widget-transform-resize:hover { background: var(--accent); }
 .wb-canvas .x6-port-body { opacity: 0; pointer-events: none; }
 .wb-canvas[data-mode="connect"] .x6-port-body, .wb-canvas[data-mode="pin"] .x6-port-body { opacity: 1; pointer-events: all; filter: drop-shadow(0 0 1px white) drop-shadow(0 0 1px white); }
 .wb-canvas[data-mode="connect"] .x6-port-body:hover, .wb-canvas[data-mode="pin"] .x6-port-body:hover { stroke-width: 3; }

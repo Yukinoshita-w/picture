@@ -171,11 +171,69 @@ def main():
         corner = evaluate("(() => {const r=document.querySelector('.x6-widget-transform-resize[data-position=\"bottom-right\"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
         drag(corner, {'x': corner['x'] + 55, 'y': corner['y'] + 40})
         assert evaluate(graph + '.getNodes()[0].size().width') > size['width'] + 20
+        enlarged = evaluate(graph + '.getNodes()[0].size()')
+        assert abs(enlarged['width'] / enlarged['height'] - size['width'] / size['height']) < .001
+        # Shrink an actual image below the old 120 x 100 limit, then undo/redo.
+        corner = evaluate("(() => {const r=document.querySelector('.x6-widget-transform-resize[data-position=\"bottom-right\"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()")
+        zoom = evaluate(graph + '.zoom()')
+        drag(corner, {'x': corner['x'] + (80 - enlarged['width']) * zoom, 'y': corner['y'] + (80 * enlarged['height'] / enlarged['width'] - enlarged['height']) * zoom})
+        small = evaluate(graph + '.getNodes()[0].size()')
+        assert 24 <= small['width'] < 120 and 24 <= small['height'] < 100, small
+        assert abs(small['width'] / small['height'] - size['width'] / size['height']) < .001
+        assert evaluate(editor + '.snapshot().nodes[0].width') == small['width']
+        click('#wbUndo')
+        assert evaluate(graph + '.getNodes()[0].size()') == enlarged
+        assert evaluate("document.querySelectorAll('.x6-widget-transform').length") == 1
+        click('#wbRedo')
+        assert evaluate(graph + '.getNodes()[0].size()') == small
+        click('#wbUndo')
+        # Inspector controls scale only this image, around its center, in one undo step.
+        before_scale = evaluate(graph + '.getNodes().map(n=>({size:n.size(),position:n.position(),data:n.getData(),ports:n.getPorts()}))')
+        viewport = evaluate(graph + '.zoom()')
+        click('#wbNodeEnlarge')
+        after_scale = evaluate(graph + '.getNodes().map(n=>({size:n.size(),position:n.position(),data:n.getData(),ports:n.getPorts()}))')
+        assert abs(after_scale[0]['size']['width'] / enlarged['width'] - 1.2) < .001
+        for axis, dimension in [('x', 'width'), ('y', 'height')]:
+            assert abs(after_scale[0]['position'][axis] + after_scale[0]['size'][dimension] / 2 - before_scale[0]['position'][axis] - before_scale[0]['size'][dimension] / 2) < .001
+        assert after_scale[0]['data'] == before_scale[0]['data'] and after_scale[0]['ports'] == before_scale[0]['ports']
+        assert after_scale[1] == before_scale[1] and evaluate(graph + '.zoom()') == viewport
+        click('#wbUndo')
+        assert evaluate(graph + '.getNodes()[0].size()') == enlarged
+        assert evaluate(graph + '.getNodes()[0].position()') == before_scale[0]['position']
+        click('#wbRedo')
+        click('#wbNodeShrink')
+        assert abs(evaluate(graph + '.getNodes()[0].size().width') - enlarged['width']) < .001
         evaluate('void ' + graph + '.resetSelection([' + graph + '.getEdges()[0]])')
+        assert evaluate("document.querySelectorAll('.x6-widget-transform').length") == 0
         assert evaluate(graph + '.getEdges()[0].getTools().local'), 'edge handles must share the lower edge layer'
         evaluate("document.querySelector('#wbEdgeLabel').value='灵感的关联';document.querySelector('#wbEdgeLabel').dispatchEvent(new Event('change'))")
         evaluate("document.querySelector('#wbEdgeArrow').checked=true;document.querySelector('#wbEdgeArrow').dispatchEvent(new Event('change'))")
         assert evaluate(graph + ".getEdges()[0].getData().label==='灵感的关联'")
+        # Double-click a real, exposed part of the line to edit its text.
+        evaluate("document.querySelector('#wbCanvas').scrollIntoView({block:'center'})")
+        point = evaluate("(() => {const g=" + graph + ",e=g.getEdges()[0],v=g.findViewByCell(e);for(const t of [.5,.4,.6,.3,.7]){const p=g.localToClient(v.getPointAtRatio(t));if(document.elementFromPoint(p.x,p.y)?.closest('[data-cell-id]')?.getAttribute('data-cell-id')===e.id)return p}return null})()")
+        assert point, 'a visible line segment must be available for editing'
+        dev.call('Input.dispatchMouseEvent', {'type': 'mousePressed', 'x': point['x'], 'y': point['y'], 'button': 'left', 'clickCount': 2})
+        dev.call('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': point['x'], 'y': point['y'], 'button': 'left', 'clickCount': 2})
+        dev.until("document.activeElement?.id==='wbEdgeLabel'")
+        dev.call('Input.insertText', {'text': '共同的故事'})
+        assert evaluate(graph + ".getEdges()[0].getData().label==='共同的故事'&&" + graph + '.getEdges()[0].getLabels().length===1')
+        edge_state = evaluate(editor + '.snapshot().edges[0]')
+        click('#wbClearEdgeLabel')
+        assert evaluate(graph + ".getEdges()[0].getData().label===''&&" + graph + '.getEdges()[0].getLabels().length===0&&' + graph + '.getEdges().length===2'), evaluate('({edges:' + graph + '.getEdges().map(e=>({id:e.id,data:e.getData(),labels:e.getLabels()})),selected:' + graph + '.getSelectedCells().map(e=>e.id),field:document.querySelector("#wbEdgeLabel").value,disabled:document.querySelector("#wbClearEdgeLabel").disabled})')
+        cleared_state = evaluate(editor + '.snapshot().edges[0]')
+        assert {k:v for k,v in edge_state.items() if k!='label'} == {k:v for k,v in cleared_state.items() if k!='label'}
+        click('#wbUndo')
+        assert evaluate(graph + ".getEdges()[0].getData().label==='共同的故事'&&document.querySelector('#wbEdgeLabel').value==='共同的故事'")
+        click('#wbRedo')
+        assert evaluate(graph + '.getEdges()[0].getLabels().length===0')
+        click('#wbUndo')
+        click('#wbEdgeLabel')
+        evaluate("document.querySelector('#wbEdgeLabel').select()")
+        dev.call('Input.dispatchKeyEvent', {'type':'keyDown','key':'Backspace','code':'Backspace','windowsVirtualKeyCode':8})
+        dev.call('Input.dispatchKeyEvent', {'type':'keyUp','key':'Backspace','code':'Backspace','windowsVirtualKeyCode':8})
+        assert evaluate(graph + ".getEdges()[0].getData().label===''&&" + graph + '.getEdges().length===2')
+        dev.call('Input.insertText', {'text': '灵感的关联'})
 
         # Swap through the picker, then undo: the source image and all edges must survive.
         evaluate('void ' + graph + '.resetSelection([' + graph + '.getNodes()[0]])')
@@ -243,6 +301,7 @@ def main():
         svg = next(downloads.glob('*.svg')).read_text(encoding='utf-8')
         assert 'data:image/png;base64,' in svg and 'blob:' not in svg
         assert '我的建筑展' in svg and '朱红色的傍晚' not in svg and '蓝色的清晨' not in svg, 'export should include only authored captions'
+        assert '灵感的关联' in svg, 'export should preserve edited edge text'
         assert 'x6-port' not in svg, 'export must omit editing rings even from connect mode'
         assert next(downloads.glob('*.png')).read_bytes().startswith(b'\x89PNG')
         assert evaluate("getComputedStyle(document.querySelector('.x6-port-body')).opacity==='1'"), 'export should preserve editor mode'
