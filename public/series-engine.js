@@ -1,9 +1,8 @@
 (function (root) {
   'use strict';
 
-  // The series compiler. Deliberately deterministic: the same canon + shot + gallery
-  // must always render the same prompt string, because series consistency depends on
-  // the anchor block being byte-identical across every frame.
+  // Deterministic compilation: shared identity/style stays intact, while explicitly
+  // selected frame variables replace only the corresponding composition defaults.
   const { formatReferenceGuidance, referencedIndexes } = typeof module === 'object' && module.exports
     ? require('./reference-guidance')
     : root.ReferenceGuidance;
@@ -204,16 +203,149 @@
     return value;
   }
 
-  function compileShot({ canon, shot, gallery = [], lore = [], size, quality, n = 1, limit = PROMPT_LIMIT, requirements }) {
+  const AXIS_KINDS = {
+    scene: /^(scene|place|location|场景|地点)$/i,
+    time: /^(time|时间|时段)$/i,
+    distance: /^(shot|distance|framing|shot[_-]?size|景别)$/i,
+    angle: /^(view|angle|camera[_-]?angle|机位|角度|视角|机位角度)$/i
+  };
+  const AXIS_LABELS = { scene: '场景', time: '时间', distance: '景别', angle: '机位' };
+  // These checks cover explicit, recognisable contradictions; they are not a
+  // general natural-language or visual consistency judgement.
+  const VARIABLE_TERMS = {
+    distance: [
+      ['close', /特写|close[ -]?up/ig], ['half', /半身|half[ -]?body|waist[ -]?up/ig],
+      ['full', /全身|full[ -]?(?:body|length)/ig], ['medium', /中近景|中景|medium shot/ig], ['wide', /远景|全景|wide shot/ig]
+    ],
+    time: [
+      ['night', /雨夜|夜晚|夜间|深夜|午夜|夜景|\bnight\b/ig], ['morning', /清晨|凌晨|黎明|早晨|\bmorning\b|\bdawn\b/ig],
+      ['noon', /正午|中午|\bnoon\b/ig], ['dusk', /黄昏|傍晚|日落|\bdusk\b|\bsunset\b/ig], ['day', /白天|日间|\bdaytime\b/ig]
+    ],
+    angle: [
+      ['up', /仰视|低机位|low[ -]angle/ig], ['down', /俯视|高机位|鸟瞰|high[ -]angle|bird.s[ -]eye/ig], ['level', /平视|eye[ -]level/ig],
+      ['front', /正面|front view/ig], ['side', /侧面|侧视|side view/ig], ['back', /背面|背视|back view/ig]
+    ]
+  };
+
+  function variableTokens(text, kind, includeNegated = false) {
+    const tokens = [];
+    for (const [name, pattern] of VARIABLE_TERMS[kind] || []) {
+      pattern.lastIndex = 0;
+      for (const match of String(text || '').matchAll(pattern)) {
+        if (includeNegated || !/(?:不要|避免|禁止|并非|不是|不采用|非)\s*$/.test(String(text).slice(Math.max(0, match.index - 6), match.index))) {
+          tokens.push(name);
+          break;
+        }
+      }
+    }
+    return tokens;
+  }
+
+  function opposed(a, b, kind) {
+    if (a === b) return false;
+    if (kind === 'angle') {
+      const vertical = ['up', 'down', 'level'];
+      return vertical.includes(a) === vertical.includes(b);
+    }
+    if (kind === 'time' && ((a === 'day' && b !== 'night') || (b === 'day' && a !== 'night'))) return false;
+    if (kind === 'distance' && (['half', 'medium'].includes(a) && ['half', 'medium'].includes(b)
+      || ['full', 'wide'].includes(a) && ['full', 'wide'].includes(b))) return false;
+    return true;
+  }
+
+  function selectedVariables(shot, axes) {
+    const definitions = new Map((Array.isArray(axes) ? axes : []).map(axis => [clean(axis?.id), axis]));
+    return Object.entries(shot?.axisValues || {}).filter(([, value]) => clean(value)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([id, raw]) => {
+        const axis = definitions.get(id);
+        const label = clean(axis?.label);
+        const kind = Object.keys(AXIS_KINDS).find(key => AXIS_KINDS[key].test(label) || AXIS_KINDS[key].test(id)) || '';
+        return { id, label: label || AXIS_LABELS[kind] || id, value: clean(raw), kind, axis };
+      });
+  }
+
+  function variableContext(canon, shot, axes, baseAnchor, warnings) {
+    const variables = selectedVariables(shot, axes).map(entry => ({ ...entry, value: applyTerms(entry.value, canon?.terms) }));
+    if (!variables.length) return { variables, anchor: baseAnchor, section: '', effectiveShot: shot };
+    const defaults = [];
+    for (const entry of variables) {
+      if (entry.kind === 'distance' && clean(canon?.lens?.distance)) defaults.push(clean(canon.lens.distance));
+      if (entry.kind === 'angle' && clean(canon?.lens?.angle)) defaults.push(clean(canon.lens.angle));
+      if (entry.kind === 'time') {
+        const selected = variableTokens(entry.value, 'time');
+        if (selected.some(a => variableTokens(canon?.lighting?.key, 'time').some(b => opposed(a, b, 'time')))) {
+          defaults.push(clean(canon.lighting.key));
+        }
+      }
+      if (entry.axis && !list(entry.axis.values, 24).includes(clean(shot.axisValues[entry.id]))) {
+        warnings.push('变量「' + entry.label + '：' + entry.value + '」已不在当前轴取值中，本次保留帧的原取值。');
+      }
+    }
+    const omit = new Set(defaults.flatMap(value => value.split(/[，,；;。]/).map(clean)).filter(Boolean));
+    const clauses = baseAnchor.split(/[，,；;。]/).map(clean).filter(Boolean);
+    const retained = clauses.filter(clause => !omit.has(clause));
+    const anchor = retained.length === clauses.length ? baseAnchor : (retained.length ? retained.join('，') + '。' : '');
+    const scene = variables.find(entry => entry.kind === 'scene');
+    const effectiveShot = scene ? { ...shot, scene: scene.value } : shot;
+    if (scene && clean(shot?.scene) && applyTerms(shot.scene, canon?.terms) !== scene.value) {
+      warnings.push('本次场景采用变量「' + scene.value + '」，替代帧场景「' + applyTerms(shot.scene, canon?.terms) + '」；原描述仍保留在帧中。');
+    }
+    const section = '【本帧变量】\n' + variables.map(entry => entry.label + '：' + entry.value).join('；')
+      + '。\n角色外观、产品外形与标识等稳定特征保持不变；本帧指定的场景、时间、景别、机位及其他变量，覆盖共同设定中的同类默认值。';
+    return { variables, anchor, section, effectiveShot };
+  }
+
+  function variableConflicts(context, canon, sources) {
+    const conflicts = [];
+    for (const entry of context.variables) {
+      if (/^(角色外观|发色|发型|体型)$/i.test(entry.label) && clean(canon?.characterLook)
+        && !clean(canon.characterLook).includes(entry.value)) {
+        conflicts.push('变量「' + entry.label + '：' + entry.value + '」可能改变角色稳定外观「' + canon.characterLook + '」，请先协调设定。');
+      }
+      const selected = variableTokens(entry.value, entry.kind);
+      if (selected.some(a => selected.some(b => opposed(a, b, entry.kind)))) {
+        conflicts.push('变量「' + entry.label + '：' + entry.value + '」包含互相冲突的描述，请拆分为独立取值。');
+      }
+      for (const source of sources) {
+        // Appearance descriptions such as 全身银色鳞片 describe identity, not framing.
+        const text = source.text.replace('角色外观：' + clean(canon?.characterLook), '')
+          .split(/[，,；;。]/).filter(clause => !clause.startsWith('角色外观：')).join('；');
+        const mentioned = variableTokens(text, entry.kind, source.negative);
+        if (selected.some(a => mentioned.some(b => source.negative ? a === b : opposed(a, b, entry.kind)))) {
+          conflicts.push('变量「' + entry.label + '：' + entry.value + '」与' + source.label + '「' + clamp(text, 150) + '」冲突，请修改后再生成。');
+        }
+      }
+      for (const other of context.variables) {
+        if (other.id <= entry.id || !entry.kind || other.kind !== entry.kind) continue;
+        if (selected.some(a => variableTokens(other.value, entry.kind).some(b => opposed(a, b, entry.kind)))) {
+          conflicts.push('变量「' + entry.label + '：' + entry.value + '」与变量「' + other.label + '：' + other.value + '」冲突，请只保留一致的取值。');
+        }
+      }
+    }
+    return [...new Set(conflicts)];
+  }
+
+  function compileShot({ canon, shot, axes = [], gallery = [], lore = [], size, quality, n = 1, limit = PROMPT_LIMIT, requirements }) {
     const warnings = [];
-    const anchor = clean(canon?.anchorSentence) || renderAnchor(canon || {});
+    const baseAnchor = clean(canon?.anchorSentence) || renderAnchor(canon || {});
+    const context = variableContext(canon, shot, axes, baseAnchor, warnings);
+    const anchor = context.anchor;
     if (!anchor) warnings.push('风格圣经缺少可编译的锚点内容，请至少填写媒介、光线或色板。');
     if (anchor.length > BUDGET.anchor) warnings.push('锚点块超过 ' + BUDGET.anchor + ' 字符，建议精简风格圣经。');
 
     const { references, dropped } = assembleReferences(shot, gallery);
+    if (context.variables.some(entry => entry.kind === 'distance' || entry.kind === 'angle')) {
+      for (const ref of references) {
+        const original = (shot?.references || []).find(entry => entry.assetId === ref.assetId);
+        if (ref.slot === 'previous' && !original?.preserve) {
+          ref.preserve = '主体稳定特征与画面质感';
+          ref.change += '，景别与机位采用本帧变量';
+        }
+      }
+    }
     if (dropped.length) warnings.push('参考图超过 ' + MAX_REFERENCES + ' 张，已按优先级保留前 ' + MAX_REFERENCES + ' 张。');
 
-    let shotSection = renderShotSection(shot, canon || {});
+    let shotSection = renderShotSection(context.effectiveShot, canon || {});
     const loreText = list(shot?.loreRefs, 3)
       .map(id => (Array.isArray(lore) ? lore.find(item => item?.id === id) : null))
       .filter(Boolean)
@@ -222,31 +354,49 @@
       .join('；');
     const loreSection = loreText ? '设定摘录：' + loreText + '。' : '';
     const negative = renderNegative(canon, shot);
-    const guidanceText = formatReferenceGuidance(references).trim();
+    const guidanceText = formatReferenceGuidance(references.map(ref => ref.purpose === 'custom' ? { ...ref, purpose: '' } : ref));
     const requirementText = typeof requirements === 'function' ? String(requirements({ size, quality, n }) || '') : '';
 
     const build = section => {
       const blocks = ANCHOR_POSITION === 'last'
-        ? [section, loreSection, negative, anchor, requirementText]
-        : [anchor, section, loreSection, negative, requirementText];
+        ? [context.section, section, loreSection, negative, anchor]
+        : [anchor, context.section, section, loreSection, negative];
       return blocks.filter(Boolean).join(' ').trim();
     };
+    // Multipart text fields use CRLF on the wire. Reflect that in the final
+    // preview/result while leaving the API's base prompt free of appended suffixes.
+    const finalize = base => {
+      const full = base + guidanceText + requirementText;
+      return references.length ? full.replace(/\r?\n/g, '\r\n') : full;
+    };
 
-    let prompt = build(shotSection);
-    let total = prompt.length + (guidanceText ? guidanceText.length + 2 : 0);
+    let requestPrompt = build(shotSection);
+    let prompt = finalize(requestPrompt);
+    let total = prompt.length;
     if (total > limit && shotSection) {
       const over = total - limit;
       const trimmed = trimShotSection(shotSection, over);
       if (trimmed !== shotSection) {
         shotSection = trimmed;
-        prompt = build(shotSection);
-        total = prompt.length + (guidanceText ? guidanceText.length + 2 : 0);
+        requestPrompt = build(shotSection);
+        prompt = finalize(requestPrompt);
+        total = prompt.length;
         warnings.push('本帧描述过长，已按语句边界自动精简。');
       }
     }
     if (total > limit) {
       warnings.push('编译结果 ' + total + ' 字符，超过上限 ' + limit + '，请拆分或精简本帧后再生成。');
     }
+
+    const conflicts = variableConflicts(context, canon, [
+      { label: '共同设定', text: anchor }, { label: '本帧描述', text: shotSection },
+      { label: '原文摘录', text: loreSection }, { label: '负向约束', text: negative, negative: true },
+      ...references.flatMap((ref, index) => [
+        { label: '参考图' + (index + 1) + '保留要求', text: ref.preserve },
+        { label: '参考图' + (index + 1) + '修改要求', text: ref.change }
+      ])
+    ]);
+    warnings.push(...conflicts);
 
     const unresolved = unresolvedTerms(prompt);
     if (unresolved.length) warnings.push('提示词中还有未定义的占位符：' + unresolved.map(item => '{{' + item + '}}').join('、') + '。');
@@ -259,12 +409,15 @@
 
     return {
       prompt,
+      requestPrompt,
       references,
       dropped,
       guidance: guidanceText,
       warnings,
       characters: total,
       overLimit: total > limit,
+      conflicts,
+      blocked: conflicts.length > 0,
       anchorHash: hashString(anchor),
       anchor
     };
@@ -285,27 +438,44 @@
 
   // ---------------------------------------------------------------- matrix
 
+  function matrixKey(values) {
+    return JSON.stringify(Object.entries(values && typeof values === 'object' ? values : {})
+      .map(([id, value]) => [id, clean(value)]).filter(([, value]) => value)
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+  }
+
   function expandMatrix(axes) {
     const usable = (Array.isArray(axes) ? axes : [])
       .map(axis => ({
         id: clean(axis?.id),
         label: clean(axis?.label) || clean(axis?.id),
-        values: list(axis?.values, 24)
+        values: [...new Set((Array.isArray(axis?.values) ? axis.values : []).map(clean).filter(Boolean))].slice(0, 24)
       }))
       .filter(axis => axis.id && axis.values.length);
-    if (!usable.length) return { combinations: [], total: 0, truncated: false };
-    let combinations = [{}];
+    const ids = new Set();
+    const errors = [];
     for (const axis of usable) {
-      const next = [];
-      for (const combo of combinations) {
-        for (const value of axis.values) next.push({ ...combo, [axis.id]: value });
-      }
-      combinations = next;
-      if (combinations.length > AXIS_LIMIT) break;
+      if (ids.has(axis.id)) errors.push('变量轴 ID「' + axis.id + '」重复，请删除重复轴后重新添加，避免覆盖已有帧取值。');
+      ids.add(axis.id);
     }
-    const total = combinations.length;
-    const truncated = total > AXIS_LIMIT;
-    return { combinations: combinations.slice(0, AXIS_LIMIT), total, truncated };
+    if (!usable.length || errors.length) return { combinations: [], total: 0, truncated: false, axes: usable, errors };
+    const count = usable.reduce((product, axis) => product * BigInt(axis.values.length), 1n);
+    const total = count <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(count) : count.toString();
+    const truncated = count > BigInt(AXIS_LIMIT);
+    const combinations = [];
+    const indexes = usable.map(() => 0);
+    // Mixed-radix counting visits at most 200 complete combinations, regardless
+    // of how large the full Cartesian product is.
+    const displayed = truncated ? AXIS_LIMIT : Number(count);
+    for (let index = 0; index < displayed; index++) {
+      combinations.push(Object.fromEntries(usable.map((axis, position) => [axis.id, axis.values[indexes[position]]])));
+      for (let cursor = usable.length - 1; cursor >= 0; cursor--) {
+        indexes[cursor]++;
+        if (indexes[cursor] < usable[cursor].values.length) break;
+        indexes[cursor] = 0;
+      }
+    }
+    return { combinations, total, truncated, axes: usable, errors };
   }
 
   // ---------------------------------------------------------------- import/export
@@ -354,6 +524,19 @@
     }
     if (payload.shots !== undefined && !Array.isArray(payload.shots)) errors.push('shots 必须是数组。');
     if (payload.assets !== undefined && !Array.isArray(payload.assets)) errors.push('assets 必须是数组。');
+    if (Array.isArray(payload.shots)) for (const shot of payload.shots) {
+      const pending = shot?.pendingGeneration;
+      if (!pending) continue;
+      const asset = pending.asset;
+      const result = pending.result;
+      if (!clean(pending.id) || !clean(asset?.id) || result?.assetId !== asset?.id
+        || asset?.seriesId !== series?.id || asset?.shotId !== shot.id || asset?.role !== 'output'
+        || !/^https?:\/\//i.test(asset?.data || '')
+        || (result?.references !== undefined && (!Array.isArray(result.references)
+          || result.references.some(entry => !entry || typeof entry !== 'object' || !clean(entry.assetId))))) {
+        errors.push('待保存图片记录无效或与目标帧不匹配。');
+      }
+    }
     return { ok: errors.length === 0, errors };
   }
 
@@ -384,7 +567,15 @@
       loreRefs: Array.isArray(shot.loreRefs) ? shot.loreRefs.map(remap) : [],
       result: shot.result && shot.result.assetId
         ? { ...shot.result, assetId: remap(shot.result.assetId) }
-        : shot.result
+        : shot.result,
+      ...(shot.pendingGeneration ? { pendingGeneration: {
+        ...shot.pendingGeneration,
+        id: remap(shot.pendingGeneration.id),
+        asset: { ...shot.pendingGeneration.asset, id: remap(shot.pendingGeneration.asset.id),
+          seriesId: id, shotId: remap(shot.id) },
+        result: { ...shot.pendingGeneration.result, assetId: remap(shot.pendingGeneration.result.assetId),
+          references: (shot.pendingGeneration.result.references || []).map(entry => ({ ...entry, assetId: remap(entry.assetId) })) }
+      } } : {})
     }));
 
     const gallery = payload.series.gallery;
@@ -419,6 +610,7 @@
     estimateBudget,
     trimShotSection,
     hashString,
+    matrixKey,
     expandMatrix,
     exportSeries,
     validateImport,

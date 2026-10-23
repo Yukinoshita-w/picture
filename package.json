@@ -8,7 +8,14 @@
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node --test tests/server.test.js tests/optimizer.test.js tests/series-engine.test.js tests/series-llm.test.js tests/series-drift.test.js tests/series-server.test.js checks/whiteboard.test.cjs",
-    "test:whiteboard": "node --test checks/whiteboard.test.cjs && python checks/whiteboard_smoke.py"
+    "test:whiteboard": "node --test checks/whiteboard.test.cjs && python checks/whiteboard_smoke.py",
+    "test:series": "python tests/series_smoke.py",
+    "test:series-generation": "python tests/series_generation_smoke.py",
+    "test:series-async": "python tests/series_async_smoke.py",
+    "test:series-models": "python tests/series_models_smoke.py",
+    "test:series-storage": "python tests/series_storage_smoke.py",
+    "test:series-remote": "python tests/series_remote_smoke.py",
+    "test:series-matrix": "python tests/series_matrix_smoke.py"
   },
   "engines": {
     "node": ">=20"

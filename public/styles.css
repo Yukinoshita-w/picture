@@ -2497,6 +2497,7 @@ dialog::backdrop {
 .series-shot-state[data-state="failed"] { color: var(--error); border-color: currentColor; }
 .series-shot-state[data-state="deviation"] { color: var(--accent); border-color: currentColor; }
 .series-shot-state[data-state="running"] { color: var(--accent); border-color: currentColor; }
+.series-shot-state[data-state="pending-save"] { color: var(--accent); border-color: currentColor; }
 
 /* --- inspector --- */
 .series-inspector {
