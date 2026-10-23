@@ -34,6 +34,11 @@
     extracting: false,
     analyzing: false,
     batch: null,
+    batchStarting: false,
+    runs: [],
+    historyEditing: new Set(),
+    canonApplying: new Set(),
+    parameterSaving: new Set(),
     llm: null
   };
 
@@ -163,14 +168,23 @@
     } catch { return { mode: 'auto' }; }
   }
 
-  // Render settings follow the create page too: there is no per-series size/quality UI, so
-  // reading the live composer values keeps the series consistent with what the user set.
-  function renderConfig() {
+  function composerParameters() {
     return {
+      model: ($('#model')?.value || '').trim(),
+      capabilities: readCapabilities(),
       size: $('#size')?.value || 'default',
       quality: $('#quality')?.value || 'default',
       responseFormat: $('#responseFormat')?.value || 'auto'
     };
+  }
+
+  function seriesParameters(series = state.series) {
+    return Engine.generationParameters(series?.generationParameters || composerParameters());
+  }
+
+  function renderConfig() {
+    const { size, quality, responseFormat } = seriesParameters();
+    return { size, quality, responseFormat };
   }
 
   // Series model calls use the same path as 优化提示词: the optimizer configuration and the
@@ -344,8 +358,7 @@
       locks: ['palette', 'lighting', 'lens', 'grade', 'medium', 'terms', 'characterLook'],
       axes: [],
       gallery: { defaults: {}, maxPerShot: 4 },
-      // Render settings are not stored per series: they follow the create page so a series
-      // cannot silently use a stale size or quality.
+      generationParameters: Engine.generationParameters(composerParameters()),
       createdAt: now,
       updatedAt: now
     };
@@ -354,15 +367,15 @@
   async function saveSeries(patch = {}) {
     if (!state.series) return;
     const series = state.series;
-    Object.assign(series, patch, { updatedAt: Date.now() });
-    series.canon.anchorSentence = Engine.renderAnchor(series.canon);
-    await store.putSeries(series);
+    const saved = await store.updateSeries(series.id, current => ({ ...current, ...patch, updatedAt: Date.now() }));
+    if (!saved) return;
+    Object.assign(series, patch, { updatedAt: saved.updatedAt });
     // Keep the sidebar entry in sync; without this it keeps showing the old canon version.
     const index = state.list.findIndex(item => item.id === series.id);
     if (index >= 0) state.list[index] = series;
     else state.list.unshift(series);
     state.list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    renderHeader();
+    if (isCurrentSeries(series.id)) renderHeader();
     renderSeriesList();
   }
 
@@ -382,6 +395,7 @@
     state.openRequest = null;
     const { series, shots, assets, lore } = bundle;
     if (!series) return false;
+    Engine.ensureCanonHistory(series);
     for (const shot of shots) {
       const pending = state.volatileGenerations.get(shot.id);
       if (!pending) continue;
@@ -393,6 +407,7 @@
       }
     }
     state.series = series;
+    $('#seriesRunsPanel').dataset.seriesId = '';
     state.selectedShotId = null;
     state.selectedShotIds.clear();
     state.shots = shots;
@@ -451,13 +466,13 @@
       );
       const remove = button('×', 'series-list-remove', async event => {
         event.stopPropagation();
-        if (state.generationTask?.seriesId === series.id) return;
+        if (state.generationTask?.seriesId === series.id || state.batch?.run.seriesId === series.id) return;
         const ok = await confirmAction({
           title: '删除系列',
           text: '删除「' + (series.title || '未命名') + '」及其全部帧和图片？此操作无法撤销。',
           confirmLabel: '删除'
         });
-        if (!ok || state.generationTask?.seriesId === series.id) return;
+        if (!ok || state.generationTask?.seriesId === series.id || state.batch?.run.seriesId === series.id) return;
         if (state.openRequest?.id === series.id) state.openRequest = null;
         await store.deleteSeries(series.id);
         for (const [shotId, pending] of state.volatileGenerations) {
@@ -469,7 +484,7 @@
       });
       remove.setAttribute('aria-label', '删除系列 ' + (series.title || ''));
       remove.dataset.action = 'delete-series';
-      remove.disabled = state.generationTask?.seriesId === series.id;
+      remove.disabled = state.generationTask?.seriesId === series.id || state.batch?.run.seriesId === series.id;
       remove.title = remove.disabled ? '此系列正在生成，完成后可删除' : '删除系列';
       if (remove.disabled) remove.setAttribute('aria-label', '此系列正在生成，完成后可删除');
       item.append(open, remove);
@@ -506,11 +521,135 @@
 
   function renderAll() {
     renderHeader();
+    renderGenerationSettings();
     renderShots();
     setView(state.view);
+    refreshRuns();
+  }
+
+  function generationProblem(parameters, referenceCount = 0, credentials = imageConfig()) {
+    if (!credentials.apiUrl || !credentials.apiKey) return '请在设置中填写图片生成 API 的 URL 和 Key。';
+    if (!parameters.model) return '请在系列生成条件中填写图片模型，并保存系列参数。';
+    try {
+      const capabilities = root.ModelCapabilities.resolve(parameters.model, parameters.capabilities);
+      if (!root.ModelCapabilities.supportsSize(capabilities, parameters.size)) return '系列尺寸不受当前模型能力支持，请调整系列尺寸。';
+      if (parameters.quality !== 'default' && !capabilities.qualities.includes(parameters.quality)) return '系列画质不受当前模型能力支持，请调整系列画质。';
+      if (parameters.responseFormat !== 'auto' && !capabilities.responseFormats.includes(parameters.responseFormat)) return '系列返回格式不受当前模型能力支持，请选择自动或受支持的格式。';
+      if (referenceCount > capabilities.maxReferences) return '系列模型能力最多支持 ' + capabilities.maxReferences + ' 张参考图，请调整帧引用或从创作页更新能力配置。';
+    } catch (error) { return describeError(error); }
+    return '';
+  }
+
+  function parameterOptions(parameters) {
+    let capabilities;
+    try { capabilities = root.ModelCapabilities.resolve(parameters.model, parameters.capabilities); }
+    catch { capabilities = { sizes: [], qualities: [], responseFormats: [] }; }
+    for (const [id, value, choices, fallback] of [
+      ['seriesSize', parameters.size, capabilities.sizes, ['default', '由接口决定']],
+      ['seriesQuality', parameters.quality, capabilities.qualities, ['default', '由接口决定']],
+      ['seriesResponseFormat', parameters.responseFormat, capabilities.responseFormats, ['auto', '自动']]
+    ]) {
+      const select = $('#' + id);
+      select.replaceChildren(new Option(fallback[1], fallback[0]), ...choices.map(choice => new Option(choice, choice)));
+      if (![...select.options].some(option => option.value === value)) select.add(new Option(value + '（请核对能力）', value));
+      select.value = value;
+    }
+  }
+
+  function renderGenerationSettings() {
+    const series = state.series;
+    if (!series) return;
+    const parameters = seriesParameters(series);
+    $('#seriesModel').value = parameters.model;
+    parameterOptions(parameters);
+    $('#seriesGenerationSettings').dataset.seriesId = series.id;
+    $('#seriesGenerationSummary').textContent = '系列生成条件 · ' + (parameters.model || '尚未指定模型') + ' · ' + parameters.size + ' · 设定 v' + Engine.selectedCanon(series).version;
+    $('#seriesParametersNotice').textContent = series.generationParameters
+      ? '参数独立保存在此系列。URL 和 Key 使用设置中的当前凭据；模型能力随参数保存，从创作页更新时一并复制。修改只影响后续任务。'
+      : '此旧系列尚未采用独立参数，当前显示创作页的值。请核对并保存；首次生成前也会固定这些值。';
+    const select = $('#seriesGenerationVersion');
+    select.replaceChildren(new Option('当前采用 · v' + series.canon.version, ''));
+    for (const entry of series.canonVersions || []) select.add(new Option('v' + entry.version + (entry.source === 'legacy-current' ? '（旧系列当前设定）' : ''), String(entry.version)));
+    select.value = series.generationVersion ? String(series.generationVersion) : '';
+    $('#seriesParametersSave').disabled = state.parameterSaving.has(series.id);
+    $('#seriesParametersCopy').disabled = state.parameterSaving.has(series.id);
+    $('#seriesParametersStatus').textContent = generationProblem(parameters);
+  }
+
+  async function saveGenerationParameters(copy = false) {
+    const series = state.series;
+    if (!series || state.parameterSaving.has(series.id)) return;
+    const parameters = Engine.generationParameters(copy ? composerParameters() : { ...seriesParameters(series),
+      model: $('#seriesModel').value, size: $('#seriesSize').value, quality: $('#seriesQuality').value, responseFormat: $('#seriesResponseFormat').value });
+    // Credentials may be supplied later; capability mismatches must be fixed before saving.
+    const problem = generationProblem(parameters, 0, { apiUrl: 'configured', apiKey: 'configured' });
+    if (problem) { $('#seriesParametersStatus').textContent = problem; return; }
+    state.parameterSaving.add(series.id);
+    try {
+      const saved = await store.updateSeries(series.id, stored => ({ ...stored, generationParameters: parameters, updatedAt: Date.now() }));
+      if (!saved) return;
+      // Preserve local edits that may still be queued for persistence.
+      if (isCurrentSeries(series.id)) state.series.generationParameters = saved.generationParameters;
+      if (isVisibleSeries(series.id)) { renderGenerationSettings(); renderInspector(); status(copy ? '已从创作页复制参数与模型能力。' : '已保存系列生成参数。', 'success'); }
+    } catch (error) { if (isVisibleSeries(series.id)) status('参数保存失败：' + describeError(error), 'error'); }
+    finally { state.parameterSaving.delete(series.id); if (isCurrentSeries(series.id)) renderGenerationSettings(); }
+  }
+
+  async function ensureSeriesParameters(series, parameters = Engine.generationParameters(composerParameters())) {
+    if (series.generationParameters) return;
+    const saved = await store.updateSeries(series.id, stored => ({ ...stored, generationParameters: stored.generationParameters || parameters }));
+    if (!saved) throw new Error('系列已不存在。');
+    series.generationParameters = saved.generationParameters;
+    if (isCurrentSeries(series.id)) { state.series.generationParameters = saved.generationParameters; renderGenerationSettings(); }
+  }
+
+  function showVersion(version, series = state.series) {
+    if (!series) return;
+    const entry = series.canonVersions?.find(item => item.version === version);
+    const dialog = el('dialog', 'series-version-dialog');
+    const heading = el('h2', '', '设定 v' + (version || '未知'));
+    const close = button('关闭', 'button secondary', () => dialog.close());
+    dialog.setAttribute('aria-label', heading.textContent);
+    dialog.append(heading);
+    if (!entry) dialog.append(el('p', 'series-hint', '此旧结果缺少历史设定快照，无法还原；不会用当前设定代替。'));
+    else {
+      if (entry.source === 'legacy-current') dialog.append(el('p', 'series-hint', '这是首次记录的旧系列当前设定；更早版本未曾保存，无法还原。'));
+      dialog.append(el('p', '', Engine.renderAnchor(entry.canon)));
+      const comparison = el('p', 'series-hint');
+      const changes = Object.keys({ ...entry.canon, ...series.canon }).filter(key => !['version', 'anchorSentence'].includes(key) && JSON.stringify(entry.canon[key]) !== JSON.stringify(series.canon[key]));
+      comparison.textContent = changes.length ? '与当前采用版本不同的字段：' + changes.map(key => ({medium:'媒介',palette:'色板',lighting:'光线',lens:'镜头',composition:'构图',grade:'调色',material:'材质',terms:'术语',characterLook:'角色外观',atmosphere:'氛围',negative:'负向约束'}[key] || key)).join('、') : '与当前采用设定的内容相同。';
+      const full = el('pre', 'series-version-snapshot', JSON.stringify(entry.canon, null, 2));
+      dialog.append(comparison, full);
+    }
+    dialog.append(close);
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
   }
 
   // ---------------------------------------------------------------- canon
+
+  function markCanonDraft(series, canon, theme) {
+    const draft = { canon: structuredClone(canon), updatedAt: Date.now(),
+      ...(theme || series.canonDraft?.theme ? { theme: structuredClone(theme || series.canonDraft.theme) } : {}) };
+    series.canonDraft = draft;
+    series.canonDirty = true;
+    updateAnchorPreview();
+    store.updateSeries(series.id, stored => ({ ...Engine.ensureCanonHistory(stored),
+      canonDraft: draft, canonDirty: true, updatedAt: Date.now() })).then(saved => {
+      if (saved && isCurrentSeries(series.id) && state.series.canonDraft?.updatedAt === draft.updatedAt) {
+        $('#seriesCanonWarning').textContent = '草稿已自动保存，尚未应用；生成仍使用已采用的设定。';
+      }
+    }).catch(error => {
+      if (isVisibleSeries(series.id)) status('草稿保存失败，请勿刷新；可重试应用或导出备份。' + describeError(error), 'error');
+    });
+  }
+
+  function saveAxes(series) {
+    const axes = structuredClone(series.axes);
+    store.updateSeries(series.id, stored => ({ ...stored, axes, updatedAt: Date.now() }))
+      .catch(error => { if (isVisibleSeries(series.id)) status('可变轴保存失败：' + describeError(error), 'error'); });
+  }
 
   const CANON_GROUPS = [
     {
@@ -585,8 +724,9 @@
   function renderCanon() {
     const series = state.series;
     if (!series) return;
-    const canon = series.canon;
+    const canon = { ...blankCanon(), ...structuredClone(series.canonDraft?.canon || series.canon) };
     const form = $('#seriesCanonForm');
+    form.inert = state.canonApplying.has(series.id);
     const groups = CANON_GROUPS.map(group => {
       const fieldset = el('fieldset', 'series-canon-group');
       fieldset.append(el('legend', '', group.title));
@@ -601,8 +741,7 @@
         input.dataset.canonPath = path;
         input.addEventListener('input', () => {
           writePath(canon, path, input.value);
-          series.canonDirty = true;
-          updateAnchorPreview();
+          markCanonDraft(series, canon);
         });
         row.append(input);
         fieldset.append(row);
@@ -621,15 +760,15 @@
       name.value = entry.name || '';
       name.placeholder = '颜色名';
       name.setAttribute('aria-label', '第 ' + (index + 1) + ' 个颜色名称');
-      name.addEventListener('input', () => { entry.name = name.value; series.canonDirty = true; updateAnchorPreview(); });
+      name.addEventListener('input', () => { entry.name = name.value; markCanonDraft(series, canon); });
       const hex = el('input');
       hex.type = 'color';
       hex.value = /^#[0-9a-f]{6}$/.test(entry.hex || '') ? entry.hex : '#808080';
       hex.setAttribute('aria-label', '第 ' + (index + 1) + ' 个颜色');
-      hex.addEventListener('input', () => { entry.hex = hex.value; series.canonDirty = true; });
+      hex.addEventListener('input', () => { entry.hex = hex.value; markCanonDraft(series, canon); });
       const remove = button('×', 'series-palette-remove', () => {
         canon.palette.splice(index, 1);
-        series.canonDirty = true;
+        markCanonDraft(series, canon);
         renderCanon();
       });
       remove.setAttribute('aria-label', '移除颜色 ' + (entry.name || index + 1));
@@ -638,7 +777,7 @@
     });
     paletteList.append(button('＋ 添加颜色', 'text-action', () => {
       canon.palette.push({ name: '', hex: '#808080', weight: 0.3 });
-      series.canonDirty = true;
+      markCanonDraft(series, canon);
       renderCanon();
     }));
     paletteGroup.append(paletteList);
@@ -660,8 +799,8 @@
         const next = keyInput.value.trim();
         if (!/^[A-Za-z0-9_-]{1,40}$/.test(next) || Object.hasOwn(canon.terms, next)) { keyInput.value = key; return; }
         delete canon.terms[key];
-        canon.terms[next] = value;
-        series.canonDirty = true;
+        canon.terms[next] = valueInput.value;
+        markCanonDraft(series, canon);
         renderCanon();
       });
       const valueInput = el('input');
@@ -669,10 +808,10 @@
       valueInput.value = value || '';
       valueInput.placeholder = '替换成的名字';
       valueInput.setAttribute('aria-label', '术语 ' + key + ' 的值');
-      valueInput.addEventListener('input', () => { canon.terms[key] = valueInput.value; series.canonDirty = true; });
+      valueInput.addEventListener('input', () => { canon.terms[key] = valueInput.value; markCanonDraft(series, canon); });
       const remove = button('×', 'series-palette-remove', () => {
         delete canon.terms[key];
-        series.canonDirty = true;
+        markCanonDraft(series, canon);
         renderCanon();
       });
       remove.setAttribute('aria-label', '移除术语 ' + key);
@@ -683,7 +822,7 @@
       let index = 1;
       while (Object.hasOwn(canon.terms, 'term' + index)) index++;
       canon.terms['term' + index] = '';
-      series.canonDirty = true;
+      markCanonDraft(series, canon);
       renderCanon();
     }));
     termGroup.append(termList);
@@ -697,7 +836,7 @@
     negativeInput.placeholder = '水印、文字、多余人物';
     negativeInput.addEventListener('input', () => {
       canon.negative = negativeInput.value.split(/[、,，;；]/).map(item => item.trim()).filter(Boolean).slice(0, 8);
-      series.canonDirty = true;
+      markCanonDraft(series, canon);
     });
     negativeGroup.append(negativeInput);
     negativeGroup.append(el('p', 'field-hint', '用顿号或逗号分隔。编译时会写成「避免……」追加在提示词末尾。'));
@@ -714,7 +853,7 @@
       label.value = axis.label || '';
       label.placeholder = '轴名称，如场景';
       label.setAttribute('aria-label', '第 ' + (index + 1) + ' 个轴名称');
-      label.addEventListener('input', () => { axis.label = label.value; series.canonDirty = true; });
+      label.addEventListener('input', () => { axis.label = label.value; saveAxes(series); });
       const values = el('input');
       values.type = 'text';
       values.value = (axis.values || []).join('、');
@@ -722,11 +861,11 @@
       values.setAttribute('aria-label', '第 ' + (index + 1) + ' 个轴的取值');
       values.addEventListener('input', () => {
         axis.values = values.value.split(/[、,，;；]/).map(item => item.trim()).filter(Boolean).slice(0, 24);
-        series.canonDirty = true;
+        saveAxes(series);
       });
       const remove = button('×', 'series-palette-remove', () => {
         series.axes.splice(index, 1);
-        series.canonDirty = true;
+        saveAxes(series);
         renderCanon();
       });
       remove.setAttribute('aria-label', '移除轴 ' + (axis.label || index + 1));
@@ -740,7 +879,7 @@
       let id;
       do { id = uid('axis'); } while (used.has(id));
       series.axes.push({ id, label: '', values: [] });
-      series.canonDirty = true;
+      saveAxes(series);
       renderCanon();
     });
     addAxis.dataset.action = 'add-axis';
@@ -753,18 +892,19 @@
   function updateAnchorPreview() {
     const series = state.series;
     if (!series) return;
-    const anchor = Engine.renderAnchor(series.canon);
-    series.canon.anchorSentence = anchor;
+    const anchor = Engine.renderAnchor(series.canonDraft?.canon || series.canon);
     $('#seriesAnchorPreview').textContent = anchor || '还没有足够的信息生成锚点句。至少填写媒介、光线或色板。';
     $('#seriesAnchorChars').textContent = String(anchor.length);
     $('#seriesCanonVersion').textContent = String(series.canon.version || 1);
+    $('#seriesCanonSave').disabled = !series.canonDraft || state.canonApplying.has(series.id);
+    $('#seriesCanonDiscard').disabled = !series.canonDraft || state.canonApplying.has(series.id);
     const warning = $('#seriesCanonWarning');
     if (anchor.length > Engine.BUDGET.anchor) {
       warning.hidden = false;
       warning.textContent = '锚点句已超过 ' + Engine.BUDGET.anchor + ' 字符，建议精简，否则会挤占每帧的描述预算。';
-    } else if (series.canonDirty) {
+    } else if (series.canonDraft) {
       warning.hidden = false;
-      warning.textContent = '有未保存的改动。点击「保存为新手版本」才会写入新版本号。';
+      warning.textContent = '有尚未应用的草稿；生成仍使用已采用的设定。草稿正在自动保存。';
     } else {
       warning.hidden = true;
     }
@@ -772,13 +912,37 @@
 
   async function saveCanonVersion() {
     const series = state.series;
-    if (!series) return;
-    series.canon.version = (series.canon.version || 1) + 1;
-    series.canon.anchorSentence = Engine.renderAnchor(series.canon);
-    series.canonDirty = false;
-    await saveSeries();
+    if (!series?.canonDraft || state.canonApplying.has(series.id)) return;
+    state.canonApplying.add(series.id);
+    $('#seriesCanonForm').inert = true;
     updateAnchorPreview();
-    status('已保存为圣经 v' + series.canon.version + '。已生成的帧仍保留原版本号。', 'success');
+    const draft = structuredClone(series.canonDraft);
+    try {
+      const saved = await store.updateSeries(series.id, stored => Engine.applyCanonDraft({ ...stored, canonDraft: draft }));
+      if (!saved) return;
+      syncSeriesRecord(saved);
+      if (isVisibleSeries(series.id)) {
+        renderAll();
+        status('已应用设定 v' + saved.canon.version + '。已生成的帧保持原结果。', 'success');
+      }
+    } catch (error) { if (isVisibleSeries(series.id)) status('应用失败，草稿仍保留：' + describeError(error), 'error'); }
+    finally {
+      state.canonApplying.delete(series.id);
+      if (isCurrentSeries(series.id)) { $('#seriesCanonForm').inert = false; updateAnchorPreview(); }
+    }
+  }
+
+  async function discardCanonDraft() {
+    const series = state.series;
+    if (!series?.canonDraft || state.canonApplying.has(series.id)) return;
+    const ok = await confirmAction({ title: '放弃设定草稿', text: '放弃尚未应用的修改？已采用设定和已生成图片将保留。', confirmLabel: '放弃草稿' });
+    if (!ok) return;
+    try {
+      const saved = await store.updateSeries(series.id, stored => ({ ...stored, canonDraft: null, canonDirty: false }));
+      if (!saved) return;
+      syncSeriesRecord(saved);
+      if (isVisibleSeries(series.id)) { renderCanon(); status('已放弃草稿。'); }
+    } catch (error) { if (isVisibleSeries(series.id)) status('放弃草稿失败：' + describeError(error), 'error'); }
   }
 
   // ---------------------------------------------------------------- shots
@@ -817,13 +981,22 @@
     };
   }
 
-  async function persistShot(shot) {
+  async function persistShot(shot, { create = false } = {}) {
     shot.updatedAt = Date.now();
-    await store.putShot(shot);
+    if (create) {
+      const saved = await store.appendShots(shot.seriesId, [shot]);
+      if (!saved.length) return;
+      Object.assign(shot, saved[0]);
+    } else {
+      // Inspector edits must not overwrite a result/history committed concurrently.
+      const fields = ['title', 'beat', 'subject', 'action', 'scene', 'detail', 'overrides', 'negative', 'axisValues', 'references', 'loreRefs', 'updatedAt'];
+      const patch = Object.fromEntries(fields.filter(key => Object.hasOwn(shot, key)).map(key => [key, structuredClone(shot[key])]));
+      const saved = await store.updateShot(shot.id, shot.seriesId, current => ({ ...current, ...patch }));
+      if (!saved) return;
+    }
     if (!isCurrentSeries(shot.seriesId)) return;
     const index = state.shots.findIndex(item => item.id === shot.id);
-    if (index >= 0) state.shots[index] = shot;
-    else state.shots.push(shot);
+    if (index < 0 && create) state.shots.push(shot);
     state.shots.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     renderHeader();
   }
@@ -831,20 +1004,20 @@
   async function addNewShot() {
     if (!state.series) return;
     const shot = newShot(state.shots.length);
-    await persistShot(shot);
+    await persistShot(shot, { create: true });
     renderShots();
     setView('outline');
     selectShot(shot.id);
   }
 
-  function compileFor(shot, render = renderConfig()) {
-    const series = state.series;
+  function compileFor(shot, render = renderConfig(), context = state) {
+    const series = context.series;
     return Engine.compileShot({
-      canon: series.canon,
+      canon: Engine.selectedCanon(series),
       shot,
       axes: series.axes || [],
-      gallery: state.assets,
-      lore: state.lore,
+      gallery: context.assets,
+      lore: context.lore,
       size: render.size,
       quality: render.quality,
       n: 1,
@@ -900,6 +1073,9 @@
       const title = el('h3', 'series-shot-title', shot.title || shot.subject || '未命名帧');
       const summary = el('p', 'series-shot-summary', [shot.subject, shot.action, shot.scene].filter(Boolean).join(' · ') || '还没有描述');
       body.append(title, summary);
+      if (shot.result?.assetId && shot.result.canonVersion !== state.series.canon.version) {
+        body.append(el('small', 'series-hint', '较早设定 v' + (shot.result.canonVersion || '未知') + ' · 当前 v' + state.series.canon.version));
+      }
       const running = isGeneratingShot(shot);
       const saving = running && state.generationTask.saving;
       const state_ = el('span', 'series-shot-state', running ? (saving ? '保存中' : '生成中') : shot.pendingGeneration ? '待保存' : shot.result?.assetId ? '已出图' : shot.status === 'failed' ? '失败' : shot.status === 'deviation' ? '偏离' : '草稿');
@@ -970,7 +1146,7 @@
       seriesId: state.series.id,
       seriesTitle: state.series.title || '未命名系列',
       shotCode: shot.code || '',
-      shotTitle: shot.title || shot.subject || '',
+      shotTitle: (shot.title || shot.subject || '') + ' · 生成版本 ' + (shot.result.sequence || Engine.resultHistory(shot).findIndex(result => result.assetId === assetId) + 1),
       shotOrder: Number.isFinite(shot.order) ? shot.order : 0
     };
   }
@@ -1216,7 +1392,9 @@
       meta.dataset.over = String(compiled.overLimit);
       warnings.replaceChildren(...compiled.warnings.map(line => el('li', '', line)));
       warnings.hidden = compiled.warnings.length === 0;
-      generate.disabled = state.busy || Boolean(shot.pendingGeneration) || compiled.overLimit || compiled.blocked;
+      const problem = generationProblem(seriesParameters(), compiled.references.length);
+      if (problem) { warnings.append(el('li', '', problem)); warnings.hidden = false; }
+      generate.disabled = state.busy || Boolean(state.batch) || Boolean(shot.pendingGeneration) || compiled.overLimit || compiled.blocked;
     }
 
     // Actions must be created before the first updatePreview call: updatePreview writes
@@ -1227,16 +1405,18 @@
     generate.textContent = isGeneratingShot(shot) ? (state.generationTask.saving ? '保存中…' : '生成中…') : '生成这一帧';
     generate.title = shot.pendingGeneration ? '请先保存或放弃待保存图片' : state.busy ? '请等待当前任务完成' : '';
     const remove = button('删除这一帧', 'button text-button', async () => {
-      if (isGeneratingShot(shot)) return;
+      if (isGeneratingShot(shot) || state.batch?.targets.some(item => item.id === shot.id)) return;
       const ok = await confirmAction({
         title: '删除这一帧',
         text: '删除「' + (shot.title || shot.code || '这一帧') + '」？已生成的图片也会一并移除。',
         confirmLabel: '删除'
       });
-      if (!ok || isGeneratingShot(shot)) return;
-      if (shot.result?.assetId) await store.deleteAsset(shot.result.assetId);
-      await store.deleteShot(shot.id);
+      if (!ok || isGeneratingShot(shot) || state.batch?.targets.some(item => item.id === shot.id)) return;
+      try { await store.deleteShotWithHistory(shot.seriesId, shot.id); }
+      catch (error) { status(describeError(error), 'error'); return; }
       state.volatileGenerations.delete(shot.id);
+      const removed = new Set(Engine.resultHistory(shot).map(result => result.assetId));
+      state.assets = state.assets.filter(asset => !removed.has(asset.id));
       state.shots = state.shots.filter(item => item.id !== shot.id);
       closeInspector();
       renderShots();
@@ -1247,7 +1427,7 @@
     optimize.disabled = [...state.modelTasks.values()].some(task => task.type === 'expand' && task.seriesId === shot.seriesId && task.targetId === shot.id);
     if (optimize.disabled) optimize.textContent = '扩写中…';
     remove.dataset.action = 'delete-shot';
-    remove.disabled = isGeneratingShot(shot);
+    remove.disabled = isGeneratingShot(shot) || Boolean(state.batch?.targets.some(item => item.id === shot.id));
     remove.title = remove.disabled ? '这一帧正在生成，完成后可删除' : '';
     if (remove.disabled) remove.textContent = '生成中，暂不可删除';
     actions.append(optimize, generate, remove);
@@ -1273,6 +1453,18 @@
     }
 
     if (shot.result?.assetId) {
+      renderGenerationHistory(body, shot);
+      const trace = el('details', 'series-result-conditions');
+      trace.append(el('summary', '', '实际生成条件 · 设定 v' + (shot.result.canonVersion || '未知')));
+      const versionButton = button('查看此结果使用的设定', 'text-action', () => showVersion(shot.result.canonVersion,
+        { ...state.series, canonVersions: (state.series.canonVersions || []).filter(entry => entry.id === shot.result.canonSnapshotId) }));
+      versionButton.dataset.action = 'view-result-version';
+      trace.append(versionButton, el('pre', 'series-version-snapshot', JSON.stringify({
+        prompt: shot.result.prompt || '旧记录未保存提示词', model: shot.result.parameters?.model || '旧记录未保存模型',
+        parameters: shot.result.parameters || null, references: shot.result.references || [],
+        startedAt: shot.result.startedAt || null
+      }, null, 2)));
+      body.append(trace);
       const asset = assetFor(shot.result.assetId);
       if (asset?.data) {
         const result = el('figure', 'series-result');
@@ -1298,6 +1490,71 @@
         body.append(result);
       }
     }
+  }
+
+  function renderGenerationHistory(body, shot) {
+    const history = Engine.resultHistory(shot);
+    const section = el('section', 'series-generation-history');
+    section.append(el('h3', 'section-label', '生成历史 · ' + history.length + ' 个版本'));
+    const grid = el('div', 'series-history-grid');
+    history.forEach((result, index) => {
+      const card = el('figure', 'series-history-item');
+      card.dataset.generationId = result.assetId;
+      const asset = assetFor(result.assetId);
+      const sequence = result.sequence || index + 1;
+      if (asset?.data) card.append(clickableImage(asset.data, '生成版本 ' + sequence));
+      const selected = result.assetId === shot.result.assetId;
+      const collected = root.ArtGallery?.contains?.(result.assetId);
+      card.append(el('figcaption', '', '版本 ' + sequence + (selected ? ' · 已采用' : '')
+        + (collected ? ' · 已收藏独立副本' : '') + ' · 设定 v' + (result.canonVersion || '未知')));
+      const adopt = button(selected ? '正在采用' : '采用此版本', 'text-action', () => editGenerationHistory(shot, result.assetId));
+      adopt.dataset.action = 'adopt-generation';
+      adopt.disabled = selected || state.busy || Boolean(state.batch) || state.historyEditing.has(shot.id);
+      const remove = button('清理此版本', 'text-action', () => editGenerationHistory(shot, result.assetId, true));
+      remove.dataset.action = 'delete-generation';
+      remove.disabled = selected || state.busy || Boolean(state.batch) || state.historyEditing.has(shot.id);
+      card.append(adopt, remove);
+      if (asset?.data && !selected) {
+        const compare = button('与采用版本比较', 'text-action', () => compareGenerations(shot, result));
+        compare.dataset.action = 'compare-generation'; card.append(compare);
+      }
+      grid.append(card);
+    });
+    section.append(grid); body.append(section);
+  }
+
+  async function editGenerationHistory(shot, assetId, remove = false) {
+    if (state.busy || state.batch || state.batchStarting || state.historyEditing.has(shot.id)) return;
+    state.historyEditing.add(shot.id);
+    try {
+      if (remove && !await confirmAction({ title: '清理生成版本', text: '删除此未采用版本？已收藏到画廊和白板的独立副本保留。', confirmLabel: '清理' })) return;
+      if (state.busy || state.batch) return;
+      const saved = await (remove ? store.deleteGeneration : store.adoptGeneration)(shot.seriesId, shot.id, assetId);
+      syncGeneration({ seriesId: shot.seriesId, shotId: shot.id }, shot,
+        { result: saved.result, generationHistory: saved.generationHistory, canonVersion: saved.canonVersion, status: saved.status });
+      if (isCurrentSeries(shot.seriesId) && remove) state.assets = state.assets.filter(asset => asset.id !== assetId);
+      if (isVisibleSeries(shot.seriesId)) status(remove ? '已清理未采用版本。' : '已切换采用版本，未调用生图接口。', 'success');
+    } catch (error) { if (isVisibleSeries(shot.seriesId)) status(describeError(error), 'error'); }
+    finally {
+      state.historyEditing.delete(shot.id);
+      if (isVisibleSeries(shot.seriesId)) { renderShots(); renderHeader(); if (state.view === 'matrix') renderMatrix(); }
+    }
+  }
+
+  function compareGenerations(shot, result) {
+    const dialog = el('dialog', 'series-compare-dialog');
+    const close = button('关闭', 'button secondary', () => dialog.close());
+    dialog.append(close);
+    const grid = el('div', 'series-compare-grid');
+    for (const entry of [shot.result, result]) {
+      const figure = el('figure');
+      const asset = assetFor(entry.assetId);
+      if (asset?.data) figure.append(clickableImage(asset.data, shot.title || shot.code));
+      figure.append(el('figcaption', '', (entry === shot.result ? '采用版本' : '比较版本') + ' · 设定 v' + (entry.canonVersion || '未知')));
+      grid.append(figure);
+    }
+    dialog.append(grid); dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    document.body.append(dialog); dialog.showModal();
   }
 
   // The create page's preview dialog is reused so series images open in the same lightbox.
@@ -1336,9 +1593,9 @@
 
   // ---------------------------------------------------------------- generation
 
-  function referencesPayload(compiled) {
+  function referencesPayload(compiled, assets = state.assets) {
     return compiled.references.map(entry => {
-      const asset = assetFor(entry.assetId);
+      const asset = assets.find(item => item.id === entry.assetId);
       if (!asset?.data) return null;
       return {
         mime: asset.mime || 'image/png',
@@ -1351,30 +1608,36 @@
     }).filter(Boolean);
   }
 
-  async function generateShot(shot) {
-    if (state.busy) return;
+  function prepareGeneration(shot, context) {
+    const parameters = seriesParameters(context.series);
+    const compiled = compileFor(shot, parameters, context);
+    const references = referencesPayload(compiled, context.assets);
+    let problem = generationProblem(parameters, compiled.references.length);
+    if (!problem && shot.pendingGeneration) problem = '图片待保存，请先重试保存或放弃待保存图片。';
+    if (!problem && ![shot.subject, shot.action, shot.scene, shot.detail, shot.overrides?.note].some(value => String(value || '').trim())) problem = '帧描述为空，请填写主体、动作或场景。';
+    if (!problem && compiled.blocked) problem = '提示词存在变量冲突：' + compiled.conflicts.join(' ');
+    if (!problem && compiled.overLimit) problem = '这一帧的提示词超过上限，请精简后再生成。';
+    if (!problem && (shot.references || []).some(ref => !context.assets.some(asset => asset.id === ref.assetId && asset.data))) problem = '参考图资源缺失，请重新选择帧参考图。';
+    if (!problem && (compiled.dropped?.length || references.length !== compiled.references.length)) problem = '参考图数量超过上限或资源缺失，请调整帧引用。';
+    if (!problem && references.some(ref => !/^[A-Za-z0-9+/]+={0,2}$/.test(ref.b64_json) || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(ref.mime))) problem = '参考图需要有效的本地图片，请先保存到本地。';
+    if (!problem && references.some(ref => Math.ceil(ref.b64_json.length * .75) > IMAGE_LIMIT)) problem = '单张参考图超过 ' + bytes(IMAGE_LIMIT) + '，请压缩后重试。';
+    if (!problem && references.reduce((sum, ref) => sum + Math.ceil(ref.b64_json.length * .75), 0) > FRAME_TOTAL_LIMIT) problem = '参考图合计超过单帧 ' + bytes(FRAME_TOTAL_LIMIT) + ' 上限。';
+    return { parameters, compiled, references, problem };
+  }
+
+  async function generateShot(shot, context = null) {
+    if (state.busy || (!context && (state.batchStarting || state.historyEditing.size)) || (state.batch && context !== state.batch.context)) return;
     if (shot.pendingGeneration) { status('这张图片待保存，请先重试保存或放弃待保存图片。'); return; }
-    const series = state.series;
+    const series = context?.series || state.series;
     if (!series || shot.seriesId !== series.id) return;
-    const config = imageConfig();
-    if (!config.apiKey || !config.model) {
-      status('请先在「设置」中填写图片生成 API 的 Key 和模型。', 'error');
-      return;
-    }
-    const render = renderConfig();
-    const compiled = compileFor(shot, render);
-    if (compiled.blocked) {
-      status('提示词存在变量冲突：' + compiled.conflicts.join(' '), 'error');
-      return;
-    }
-    if (compiled.overLimit) {
-      status('这一帧的提示词超过上限，请精简后再生成。', 'error');
-      return;
-    }
-    const references = referencesPayload(compiled);
-    const total = references.reduce((sum, item) => sum + Math.ceil(item.b64_json.length * 0.75), 0);
-    if (total > FRAME_TOTAL_LIMIT) {
-      status('参考图合计 ' + bytes(total) + '，超过单帧 ' + bytes(FRAME_TOTAL_LIMIT) + ' 的上限，请减少或压缩图片。', 'error');
+    const inputs = context || { series, assets: state.assets, lore: state.lore };
+    const { parameters, compiled, references, problem } = prepareGeneration(shot, inputs);
+    if (context) context.outcome = null;
+    const config = { ...imageConfig(), model: parameters.model, capabilities: parameters.capabilities };
+    const render = { size: parameters.size, quality: parameters.quality, responseFormat: parameters.responseFormat };
+    if (problem) {
+      if (context) context.outcome = { status: 'skipped', error: problem };
+      if (isVisibleSeries(series.id)) { status(problem, 'error'); $('#seriesParametersStatus').textContent = problem; }
       return;
     }
 
@@ -1384,27 +1647,53 @@
       seriesId: series.id,
       shotId: shot.id,
       code: shot.code,
-      canonVersion: series.canon.version || 1,
+      canonVersion: Engine.selectedCanon(series).version || 1,
+      canonSnapshot: structuredClone(Engine.selectedCanon(series)),
       startedAt: Date.now(),
       prompt: compiled.prompt,
       parameters: structuredClone({ model: config.model, ...render, n: 1, capabilities: config.capabilities }),
       references: compiled.references.map(entry => {
-        const asset = assetFor(entry.assetId);
+        const asset = inputs.assets.find(item => item.id === entry.assetId);
         return { ...entry, mime: asset?.mime || 'image/png', sha256: asset?.sha256 || '' };
       }),
       previousAssetId: shot.result?.assetId,
-      baseline: state.assets.find(item => item.role === 'output' && item.id !== shot.result?.assetId)
+      runId: context?.runId || null,
+      baseline: inputs.assets.find(item => item.role === 'output' && item.id !== shot.result?.assetId)
     };
     const request = { ...config, ...render, prompt: compiled.requestPrompt, n: 1, references };
     state.generationTask = task;
     state.busy = true;
     shot.status = 'running';
     renderSeriesList();
-    renderShots();
-    renderInspector();
-    status('正在生成 ' + shot.code + '，最多等待 5 分钟。');
+    if (isVisibleSeries(task.seriesId)) {
+      renderShots();
+      status('正在生成 ' + shot.code + '，最多等待 5 分钟。');
+    }
 
     try {
+      let savedSeries = await store.getSeries(task.seriesId);
+      if (savedSeries && (!savedSeries.generationParameters || !savedSeries.canonVersions?.some(entry => entry.version === task.canonVersion))) {
+        savedSeries = await store.updateSeries(task.seriesId, stored => {
+          Engine.ensureCanonHistory(stored);
+          if (!stored.canonVersions.some(entry => entry.version === task.canonVersion)) {
+            Engine.ensureCanonHistory({ canon: task.canonSnapshot, canonVersions: stored.canonVersions }, 'request-snapshot');
+          }
+          stored.generationParameters ||= parameters;
+          return stored;
+        });
+      }
+      if (!savedSeries || !await store.getShot(task.shotId)) throw new Error('生成目标已不存在。');
+      const snapshot = savedSeries.canonVersions.find(entry => entry.version === task.canonVersion);
+      task.canonSnapshotId = snapshot?.id || null;
+      if (isCurrentSeries(task.seriesId)) {
+        state.series.generationParameters ||= savedSeries.generationParameters;
+        for (const entry of savedSeries.canonVersions) {
+          if (!state.series.canonVersions.some(current => current.version === entry.version)) state.series.canonVersions.push(entry);
+        }
+        renderGenerationSettings();
+      }
+      if (context?.onSubmitting) await context.onSubmitting(task);
+      task.submitted = true;
       const data = await post('/api/generate', request);
       const image = data.images?.[0];
       if (!image) throw new Error('接口没有返回图片');
@@ -1424,24 +1713,29 @@
         drift: 0,
         prompt: task.prompt,
         canonVersion: task.canonVersion,
+        canonSnapshotId: task.canonSnapshotId,
         parameters: task.parameters,
         references: task.references,
         startedAt: task.startedAt
       };
+      if (task.runId) result.runId = task.runId;
       if (!image.b64_json) {
         if (!/^https?:\/\//i.test(image.url || '')) throw new Error('接口没有返回有效的图片链接');
         task.pending = { id: uid('pending'), asset, result, persisted: false };
-        await saveRemoteGeneration(task, shot);
-        return;
+        return await saveRemoteGeneration(task, shot);
       }
       result.drift = await driftScore(asset, task.baseline);
       const saved = await store.saveGeneration({ seriesId: task.seriesId, shotId: task.shotId, asset, result });
-      if (!saved) return;
+      if (!saved) throw new Error('图片已返回，但目标已删除或待保存条件已改变，结果未采用。');
       publishGeneration(task, shot, saved, asset);
       if (isVisibleSeries(task.seriesId)) {
         status(task.code + ' 生成完成。' + (result.drift > 0.35 ? '这张与系列基线差异较大，可考虑加强锚点重生成。' : ''), 'success');
       }
+      return asset;
     } catch (error) {
+      if (context) context.outcome = { status: task.pending ? 'pending-save' : !task.submitted ? 'skipped'
+        : (!error.status || task.receivedImage || [408, 504].includes(error.status)) ? 'unknown' : 'failed', error: describeError(error) };
+      if (context && error.batchStopped) context.outcome.status = 'cancelled';
       if (task.pending) {
         await markPendingGeneration(task, shot, error);
         return;
@@ -1462,6 +1756,7 @@
 
   function publishGeneration(task, shot, saved, asset) {
     syncGeneration(task, shot, { result: saved.shot.result, status: saved.shot.status,
+      generationHistory: saved.shot.generationHistory,
       canonVersion: saved.shot.canonVersion, updatedAt: saved.shot.updatedAt,
       ...(task.pending ? { pendingGeneration: null } : {}) });
     if (isCurrentSeries(task.seriesId)) {
@@ -1474,6 +1769,7 @@
     state.busy = false;
     state.generationTask = null;
     renderSeriesList();
+    refreshRuns();
     if (isVisibleSeries(task.seriesId)) {
       renderShots();
       renderHeader();
@@ -1484,12 +1780,12 @@
       const generate = $('[data-action=generate-shot]');
       if (generate) {
         const compiled = current && compileFor(current);
-        generate.disabled = !current || Boolean(current.pendingGeneration) || compiled.overLimit || compiled.blocked;
+        generate.disabled = !current || Boolean(state.batch) || Boolean(current.pendingGeneration) || compiled.overLimit || compiled.blocked;
         generate.title = current?.pendingGeneration ? '请先保存或放弃待保存图片' : '';
       }
       for (const action of ['retry-generation-save', 'localize-generation']) {
         const control = $('[data-action=' + action + ']');
-        if (control) control.disabled = false;
+        if (control) control.disabled = Boolean(state.batch);
       }
     }
   }
@@ -1503,7 +1799,7 @@
       if (current.pendingGeneration && current.pendingGeneration.id !== pending.id) return null;
       return { ...current, pendingGeneration: { ...pending, persisted: true, error: '' }, status: 'pending-save', updatedAt: Date.now() };
     });
-    if (!staged) return;
+    if (!staged) throw new Error('生成目标已删除或待保存条件已改变。');
     task.pending = staged.pendingGeneration;
     task.saving = true;
     syncGeneration(task, shot, { pendingGeneration: task.pending, status: 'pending-save' });
@@ -1524,9 +1820,10 @@
     const result = { ...task.pending.result, drift: await driftScore(asset, task.baseline) };
     const saved = await store.saveGeneration({ seriesId: task.seriesId, shotId: task.shotId,
       asset, result, pendingId: task.pending.id });
-    if (!saved) return;
+    if (!saved) throw new Error('图片已返回，但目标已删除或待保存条件已改变。');
     publishGeneration(task, shot, saved, asset);
     if (isVisibleSeries(task.seriesId)) status(task.code + ' 图片已保存到本地。', 'success');
+    return asset;
   }
 
   async function markPendingGeneration(task, shot, error) {
@@ -1544,7 +1841,7 @@
   }
 
   async function retryGenerationSave(shot) {
-    if (state.busy || !isCurrentSeries(shot.seriesId)) return;
+    if (state.busy || state.batch || !isCurrentSeries(shot.seriesId)) return;
     const existing = shot.result?.assetId && assetFor(shot.result.assetId);
     const pending = shot.pendingGeneration || (existing && /^https?:/i.test(existing.data) ? (() => {
       const asset = { ...existing, id: uid('ast'), shotId: shot.id };
@@ -1724,8 +2021,9 @@
 
   async function applyCanonDraft(draft, meta, seriesId) {
     const saved = await store.updateSeries(seriesId, stored => {
-      const series = structuredClone(isCurrentSeries(seriesId) ? state.series : stored);
-      const canon = series.canon;
+      const series = Engine.ensureCanonHistory(structuredClone(stored));
+      const canon = structuredClone(series.canonDraft?.canon || series.canon);
+      const theme = structuredClone(series.canonDraft?.theme || series.theme || {});
       for (const key of ['medium', 'lighting', 'lens', 'composition', 'grade', 'material', 'characterLook', 'atmosphere']) {
         if (draft[key] && typeof draft[key] === 'object') Object.assign(canon[key] ||= {}, draft[key]);
         else if (draft[key]) canon[key] = draft[key];
@@ -1733,15 +2031,13 @@
       if (draft.palette?.length) canon.palette = draft.palette.map(item => ({ name: item.name, hex: item.hex || '#808080', weight: item.weight }));
       if (draft.terms && Object.keys(draft.terms).length) canon.terms = { ...canon.terms, ...draft.terms };
       if (draft.negative?.length) canon.negative = draft.negative;
-      if (draft.themes?.length) series.theme.keywords = draft.themes;
-      if (draft.mood?.length) series.theme.mood = draft.mood;
-      if (draft.era) series.theme.era = draft.era;
-      if (draft.taboos?.length) series.theme.taboos = draft.taboos;
-      series.theme.source = meta ? { used: meta.coverage.used, total: meta.coverage.total, degraded: meta.degraded.length } : null;
-      // The draft is written to disk immediately below, so this is not a pending edit.
-      series.canonDirty = false;
-      canon.version = (canon.version || 1) + 1;
-      canon.anchorSentence = Engine.renderAnchor(canon);
+      if (draft.themes?.length) theme.keywords = draft.themes;
+      if (draft.mood?.length) theme.mood = draft.mood;
+      if (draft.era) theme.era = draft.era;
+      if (draft.taboos?.length) theme.taboos = draft.taboos;
+      theme.source = meta ? { used: meta.coverage.used, total: meta.coverage.total, degraded: meta.degraded.length } : null;
+      series.canonDraft = { canon, theme, updatedAt: Date.now() };
+      series.canonDirty = true;
       series.updatedAt = Date.now();
       return series;
     });
@@ -1750,7 +2046,7 @@
     if (isVisibleSeries(seriesId)) {
       renderCanon();
       renderHeader();
-      status('已生成圣经 v' + saved.canon.version + '。请逐项检查，模型填充的内容都可以修改。', 'success');
+      status('已保存提炼草稿。检查后点击「应用草稿为新版本」，才会参与生成。', 'success');
     }
     return true;
   }
@@ -2270,76 +2566,165 @@
   // ---------------------------------------------------------------- batch
 
   function batchTargets() {
-    return state.shots.filter(shot => !shot.result?.assetId && !shot.pendingGeneration);
+    return state.shots.filter(shot => !shot.result?.assetId || shot.pendingGeneration);
   }
 
   // `shots` overrides the default "everything without a result" selection, so a hand-picked
   // set can be generated (or regenerated) without touching other frames. `ask` skips the
   // confirmation when the caller already asked (the split flow does).
-  async function startBatch({ shots = null, ask = true } = {}) {
-    if (state.batch) { status('已有批次在运行。'); return; }
+  async function startBatch({ shots = null, ask = true, sourceContext = null } = {}) {
+    if (state.batch || state.busy || state.batchStarting) { status('已有生成任务在运行。'); return; }
+    const series = state.series;
+    if (!series) return;
     const explicit = Array.isArray(shots) && shots.length > 0;
-    const targets = explicit ? shots.filter(shot => !shot.pendingGeneration) : batchTargets();
+    const targets = explicit ? shots : batchTargets();
     if (!targets.length) {
       status(state.shots.some(shot => shot.pendingGeneration) ? '有图片待保存，请在帧详情中重试保存，不会重新调用生图模型。' : '没有待生成的帧。');
       return;
     }
-    const config = imageConfig();
-    if (!config.apiKey || !config.model) { status('请先在「设置」中填写图片生成 API。', 'error'); return; }
+    const problem = generationProblem(sourceContext?.series.generationParameters || seriesParameters(series));
+    if (problem) { status(problem, 'error'); $('#seriesGenerationSettings').open = true; $('#seriesParametersStatus').textContent = problem; return; }
+    // Freeze conditions before confirmation; later editing and project switches cannot
+    // replace the approved batch's style, parameters, text, or reference contents.
+    const context = structuredClone(sourceContext || { series, assets: state.assets, lore: state.lore });
+    Engine.ensureCanonHistory(context.series);
+    context.series.generationParameters = sourceContext?.series.generationParameters || seriesParameters(series);
+    const frozenTargets = structuredClone(targets);
     const price = Number($('#seriesBatchPrice').value);
-    const estimate = Number.isFinite(price) && price > 0 ? '预估 $' + (price * targets.length).toFixed(2) : '未填单价，无法预估费用';
+    state.batchStarting = true;
+    const items = frozenTargets.map(shot => {
+      const problem = prepareGeneration(shot, context).problem;
+      return { shot, status: problem ? 'skipped' : 'pending', error: problem || '' };
+    });
+    const runnable = items.filter(item => item.status === 'pending').length;
+    const estimate = Number.isFinite(price) && price > 0 ? '预估 $' + (price * runnable).toFixed(2) : '未填单价，无法预估费用';
     if (ask) {
       // Billable action: spell out the count and the cost before anything is sent.
       const proceed = await confirmAction({
         title: '开始批量生成',
-        text: '将依次生成 ' + targets.length + ' 帧，每帧 1 张。' + estimate + '。每张都会实际计费。',
+        text: '共 ' + targets.length + ' 帧，检查通过 ' + runnable + ' 帧，跳过 ' + (targets.length - runnable) + ' 帧。'
+          + items.filter(item => item.error).map(item => (item.shot.code || item.shot.id) + '：' + item.error).join('；')
+          + ' 每帧 1 张。模型 ' + context.series.generationParameters.model + '，尺寸 ' + context.series.generationParameters.size
+          + '。' + estimate + '。已提交的图片可能实际计费。',
         confirmLabel: '开始生成',
         danger: false
       });
-      if (!proceed) return;
+      if (!proceed) { state.batchStarting = false; return; }
     }
+    try {
+      await ensureSeriesParameters(series, context.series.generationParameters);
+      const run = { id: uid('run'), seriesId: series.id, startedAt: Date.now(), updatedAt: Date.now(),
+        status: 'prepared', context, items, estimate };
+      await store.putRun(run);
+      await withRunLock(run.id, () => executeBatch(run));
+    } catch (error) { state.batchStarting = false; status('批次准备失败：' + describeError(error), 'error'); return; }
+    state.batchStarting = false;
+  }
 
-    const batch = { targets, done: 0, failed: 0, pending: 0, cancelled: false, paused: false, controller: new AbortController() };
+  async function withRunLock(runId, action) {
+    if (!navigator.locks) throw new Error('浏览器不支持安全批次锁，请使用新版 Chrome 或 Edge。');
+    return navigator.locks.request('prompt-studio-series-run-' + runId, { mode: 'exclusive', ifAvailable: true }, lock => {
+      if (!lock) throw new Error('此批次仍在其他页面运行，请在原页面操作或关闭原页面后恢复。');
+      return action();
+    });
+  }
+
+  async function executeBatch(run) {
+    const context = structuredClone(run.context);
+    context.runId = run.id;
+    context.completed = {};
+    for (const item of run.items) {
+      if (item.status !== 'success' || !item.assetId) continue;
+      const asset = await store.getAsset(item.assetId);
+      if (asset) { context.assets.push(asset); context.completed[item.shot.id] = asset.id; }
+    }
+    const batch = { run, targets: run.items.map(item => item.shot), context, cancelled: false, paused: false };
     state.batch = batch;
+    state.batchStarting = false;
+    run.status = 'running';
+    const persist = async () => { run.updatedAt = Date.now(); await store.putRun(run); };
+    context.onSubmitting = async task => {
+      while (batch.paused && !batch.cancelled) await new Promise(resolve => setTimeout(resolve, 150));
+      if (batch.cancelled) throw Object.assign(new Error('批次已停止，此帧尚未提交。'), { batchStopped: true });
+      const item = batch.currentItem;
+      item.status = 'submitting'; item.startedAt = task.startedAt;
+      item.actual = { prompt: task.prompt, parameters: task.parameters, references: task.references, canonVersion: task.canonVersion };
+      await persist();
+      if (batch.cancelled) throw Object.assign(new Error('批次已停止，此帧尚未提交。'), { batchStopped: true });
+      renderBatchBar();
+    };
     $('#seriesBatchBar').hidden = false;
     $('#seriesBatchTitle').textContent = '批量生成';
-    $('#seriesBatchProgress').textContent = '0 / ' + targets.length;
-    $('#seriesBatchCost').textContent = estimate;
+    $('#seriesBatchCost').textContent = run.estimate || '';
     $('#seriesBatchPause').hidden = false;
     $('#seriesBatchCancel').disabled = false;
     renderBatchBar();
 
-    for (const shot of targets) {
-      if (batch.cancelled) break;
-      // Honour the pause button between frames; the in-flight frame still finishes.
-      while (batch.paused && !batch.cancelled) {
-        await new Promise(resolve => setTimeout(resolve, 150));
+    try {
+      await persist();
+      for (const item of run.items) {
+        if (item.status !== 'pending') continue;
+        if (batch.cancelled) break;
+        // Honour the pause button between frames; the in-flight frame still finishes.
+        while (batch.paused && !batch.cancelled) {
+          await new Promise(resolve => setTimeout(resolve, 150));
+        }
+        if (batch.cancelled) break;
+        const shot = item.shot;
+        batch.currentItem = item;
+        const current = await store.getShot(shot.id);
+        if (!current || current.seriesId !== run.seriesId) {
+          item.status = 'skipped'; item.error = '目标帧已删除或不属于此系列。'; await persist(); renderBatchBar(); continue;
+        }
+        if (current.pendingGeneration) {
+          item.status = 'skipped'; item.error = '图片待保存，未再次发送。'; await persist(); renderBatchBar(); continue;
+        }
+        if (batch.cancelled) break;
+        // Resolve a captured previous-frame binding to the result produced in this run.
+        for (const reference of shot.references || []) {
+          if (reference.slot !== 'previous') continue;
+          const source = context.assets.find(asset => asset.id === reference.assetId);
+          const updated = source?.shotId && context.completed?.[source.shotId];
+          if (updated) reference.assetId = updated;
+        }
+        const asset = await generateShot(shot, context);
+        if (asset) {
+          context.assets.push(asset);
+          (context.completed ||= {})[shot.id] = asset.id;
+          item.status = 'success'; item.assetId = asset.id; item.error = '';
+        } else {
+          Object.assign(item, context.outcome || { status: 'skipped', error: '未发送生成请求。' });
+        }
+        await persist();
+        renderBatchBar();
+        await refreshRuns();
       }
-      if (batch.cancelled) break;
-      await generateShot(shot);
-      batch.done++;
-      if (shot.status === 'failed') batch.failed++;
-      if (shot.pendingGeneration) batch.pending++;
-      $('#seriesBatchProgress').textContent = batch.done + ' / ' + targets.length;
-      renderBatchBar();
+      for (const item of run.items) if (batch.cancelled && item.status === 'pending') item.status = 'cancelled';
+      run.status = batch.cancelled ? 'stopped' : 'complete';
+      await persist();
+    } catch (error) {
+      run.status = 'interrupted';
+      for (const item of run.items) if (item.status === 'submitting') { item.status = 'unknown'; item.error = '结果待确认：' + describeError(error); }
+      await persist().catch(() => {});
+      if (isVisibleSeries(run.seriesId)) status('批次已暂停：' + describeError(error) + '。未提交项可从批次记录恢复。', 'error');
+    } finally {
+      state.batch = null;
+      delete context.onSubmitting;
+      renderSelectionBar();
+      const generate = $('[data-action=generate-shot]');
+      const current = state.shots.find(shot => shot.id === state.selectedShotId);
+      if (generate && current) { const compiled = compileFor(current); generate.disabled = Boolean(current.pendingGeneration) || compiled.blocked || compiled.overLimit; }
+      $('#seriesBatchPause').hidden = true;
+      $('#seriesBatchCancel').disabled = true;
+      const counts = Engine.runSummary(run);
+      $('#seriesBatchTitle').textContent = run.status === 'stopped' ? '批量已停止' : run.status === 'interrupted' ? '批次待恢复'
+        : counts.unknown ? '批量结束，结果待确认' : counts['pending-save'] ? '批量结束，有图片待保存'
+          : counts.failed ? '批量结束，有失败项' : counts.skipped ? '批量结束，有跳过项' : '批量完成';
+      $('#seriesBatchProgress').textContent = runSummaryText(run);
+      if (isVisibleSeries(run.seriesId) && run.status !== 'interrupted') status('批量结束：' + runSummaryText(run)
+        + (Engine.runSummary(run)['pending-save'] ? '。' + Engine.runSummary(run)['pending-save'] + ' 帧图片待保存，请在帧详情重试保存。' : ''), Engine.runSummary(run).failed ? 'error' : 'info');
+      await refreshRuns();
     }
-    state.batch = null;
-    $('#seriesBatchBar').hidden = false;
-    $('#seriesBatchTitle').textContent = batch.cancelled ? '批量已取消' : batch.pending ? '批量结束，有图片待保存' : '批量完成';
-    $('#seriesBatchProgress').textContent = batch.done + ' / ' + batch.targets.length;
-    $('#seriesBatchPause').hidden = true;
-    $('#seriesBatchCancel').disabled = true;
-    renderSelectionBar();
-    updateGalleryButtons();
-    status((batch.cancelled ? '已取消，已处理 ' + batch.done + ' 帧。' : '批量结束：已处理 ' + batch.done + ' 帧，失败 ' + batch.failed + ' 帧。')
-      + (batch.pending ? ' 其中 ' + batch.pending + ' 帧图片待保存，请在帧详情重试保存。' : ''), batch.failed ? 'error' : batch.pending ? 'info' : 'success');
-    // Only auto-hide if no new batch started in the meantime.
-    setTimeout(() => {
-      if (state.batch) return;
-      $('#seriesBatchBar').hidden = true;
-      $('#seriesBatchCancel').disabled = false;
-      $('#seriesBatchCost').textContent = '';
-    }, 5000);
   }
 
   function renderBatchBar() {
@@ -2347,6 +2732,131 @@
     if (!batch) return;
     $('#seriesBatchPause').textContent = batch.paused ? '继续' : '暂停';
     $('#seriesBatchPause').hidden = false;
+    $('#seriesBatchProgress').textContent = runSummaryText(batch.run);
+  }
+
+  function runSummaryText(run) {
+    const count = Engine.runSummary(run);
+    return '共 ' + count.total + ' 帧 · 成功 ' + count.success + ' · 失败 ' + count.failed + ' · 跳过 ' + count.skipped
+      + ' · 取消 ' + count.cancelled + ' · 待提交 ' + count.pending + ' · 生成中 ' + count.submitting
+      + ' · 待保存 ' + count['pending-save'] + ' · 结果待确认 ' + count.unknown;
+  }
+
+  let runsRead = 0;
+  async function refreshRuns() {
+    const seriesId = state.series?.id;
+    if (!seriesId) return;
+    const ticket = ++runsRead;
+    try {
+      const records = await store.listRuns(seriesId);
+      if (ticket !== runsRead || !isCurrentSeries(seriesId)) return;
+      const runs = [];
+      for (const record of records.filter(run => Array.isArray(run.items))) {
+        if (state.batch?.run.id === record.id || !navigator.locks) { runs.push(record); continue; }
+        const run = await navigator.locks.request('prompt-studio-series-run-' + record.id, { ifAvailable: true }, async lock => {
+          if (!lock) return record;
+          const fresh = await store.getRun(record.id);
+          if (!fresh) return null;
+          const recovered = Engine.recoverRun(fresh, await store.listShots(seriesId));
+          if (JSON.stringify(recovered) !== JSON.stringify(fresh)) await store.putRun(recovered);
+          return recovered;
+        });
+        if (run) runs.push(run);
+      }
+      if (ticket !== runsRead || !isCurrentSeries(seriesId)) return;
+      state.runs = runs;
+      renderRuns();
+    } catch (error) { if (isVisibleSeries(seriesId)) status('无法读取批次记录：' + describeError(error), 'error'); }
+  }
+
+  function renderRuns() {
+    const panel = $('#seriesRunsPanel');
+    panel.hidden = !state.runs.length;
+    const actionable = state.runs.reduce((total, run) => total + run.items.filter(item => ['pending', 'cancelled', 'failed', 'unknown', 'pending-save'].includes(item.status)).length, 0);
+    panel.querySelector('summary').textContent = '批次记录与恢复 · ' + state.runs.length + ' 批' + (actionable ? ' · 待处理 ' + actionable + ' 项' : '');
+    if (panel.dataset.seriesId !== state.series.id) { panel.open = actionable > 0; panel.dataset.seriesId = state.series.id; }
+    const labels = { pending: '待提交', submitting: '生成中', success: '成功', failed: '失败', skipped: '跳过', cancelled: '取消（未提交）', unknown: '结果待确认', 'pending-save': '图片待保存' };
+    $('#seriesRunsList').replaceChildren(...state.runs.map(run => {
+      const section = el('section', 'series-run'); section.dataset.runId = run.id;
+      section.append(el('h3', 'section-label', new Date(run.startedAt).toLocaleString('zh-CN')), el('p', 'series-hint', runSummaryText(run)));
+      const details = el('details'); details.append(el('summary', '', '查看帧状态和生成条件'));
+      details.append(el('pre', '', JSON.stringify({ parameters: run.context.series.generationParameters,
+        canonVersion: Engine.selectedCanon(run.context.series).version, referenceCount: run.context.assets.length }, null, 2)));
+      const selected = new Set();
+      const retry = button('重试所选失败帧', 'button secondary', () => retryRunFailures(run, selected));
+      retry.dataset.action = 'retry-run-failures'; retry.disabled = true;
+      for (const item of run.items) {
+        const row = el('div', 'series-run-item'); row.dataset.runShotId = item.shot.id; row.dataset.status = item.status;
+        if (item.status === 'failed') {
+          const checkbox = el('input'); checkbox.type = 'checkbox'; checkbox.setAttribute('aria-label', '重试 ' + (item.shot.code || item.shot.id));
+          checkbox.addEventListener('change', () => { checkbox.checked ? selected.add(item.shot.id) : selected.delete(item.shot.id); retry.disabled = !selected.size || Boolean(state.batch) || state.batchStarting; });
+          row.append(checkbox);
+        }
+        row.append(el('span', '', (item.shot.code || item.shot.id) + ' · ' + labels[item.status] + (item.error ? ' · ' + item.error : '')));
+        if (item.status === 'unknown') {
+          const resolve = button('已核对，结束此项', 'text-action', () => resolveUnknown(run, item));
+          resolve.dataset.action = 'resolve-run-unknown'; resolve.disabled = Boolean(state.batch) || state.batchStarting; row.append(resolve);
+        }
+        if (item.actual) { const trace = el('details'); trace.append(el('summary', '', '实际请求条件'), el('pre', '', JSON.stringify(item.actual, null, 2))); row.append(trace); }
+        details.append(row);
+      }
+      section.append(details);
+      const resumable = run.items.filter(item => ['pending', 'cancelled'].includes(item.status)).length;
+      if (resumable) {
+        const resume = button('继续未提交项（' + resumable + '）', 'button secondary', () => resumeRun(run.id));
+        resume.dataset.action = 'resume-run'; resume.disabled = Boolean(state.batch) || state.batchStarting; section.append(resume);
+      }
+      if (run.items.some(item => item.status === 'failed')) section.append(retry);
+      return section;
+    }));
+  }
+
+  async function resumeRun(runId) {
+    if (state.batch || state.busy || state.batchStarting) return;
+    state.batchStarting = true;
+    try {
+      await withRunLock(runId, async () => {
+        const record = await store.getRun(runId);
+        if (!record || !isCurrentSeries(record.seriesId)) throw new Error('批次所属系列已切换或删除。');
+        const run = Engine.recoverRun(record, await store.listShots(record.seriesId));
+        const targets = run.items.filter(item => ['pending', 'cancelled'].includes(item.status));
+        if (!targets.length) throw new Error('没有明确尚未提交的项目。');
+        const problem = generationProblem(run.context.series.generationParameters);
+        if (problem) throw new Error(problem);
+        const proceed = await confirmAction({ title: '继续未提交项', danger: false, confirmLabel: '继续生成',
+          text: '将使用原批次条件提交 ' + targets.length + ' 帧，每帧 1 张。模型 ' + run.context.series.generationParameters.model
+            + '，尺寸 ' + run.context.series.generationParameters.size + '，画质 ' + run.context.series.generationParameters.quality
+            + '，格式 ' + run.context.series.generationParameters.responseFormat + '，设定 v' + Engine.selectedCanon(run.context.series).version
+            + '。成功、失败、跳过及结果待确认项不会重发。可能实际计费。' });
+        if (!proceed) return;
+        for (const item of targets) item.status = 'pending';
+        await executeBatch(run);
+      });
+    } catch (error) { status('无法恢复批次：' + describeError(error), 'error'); }
+    finally { state.batchStarting = false; await refreshRuns(); }
+  }
+
+  async function retryRunFailures(run, selected) {
+    if (state.batch || state.busy || state.batchStarting || !selected.size || !isCurrentSeries(run.seriesId)) return;
+    const fresh = await store.getRun(run.id);
+    if (!fresh) return;
+    const shots = fresh.items.filter(item => item.status === 'failed' && selected.has(item.shot.id)).map(item => structuredClone(item.shot));
+    if (shots.length) await startBatch({ shots, sourceContext: fresh.context });
+  }
+
+  async function resolveUnknown(run, item) {
+    if (state.batch || state.busy || state.batchStarting) return;
+    try {
+      await withRunLock(run.id, async () => {
+        if (!await confirmAction({ title: '确认结果已核对', text: '请先核对供应商的请求、计费和图片记录。此操作只将该项标记为已结束，不请求模型、不恢复图片。', confirmLabel: '已核对并结束', danger: false })) return;
+        await store.updateRun(run.id, run.seriesId, record => {
+          const target = record.items.find(entry => entry.shot.id === item.shot.id);
+          if (target && ['submitting', 'unknown'].includes(target.status)) { target.status = 'skipped'; target.error = '用户已核对供应商记录并结束此项，未重发。'; }
+          return record;
+        });
+      });
+      await refreshRuns();
+    } catch (error) { status(describeError(error), 'error'); }
   }
 
   // ---------------------------------------------------------------- lore
@@ -2446,6 +2956,7 @@
       copied = applyTemplate(series, template);
       series.theme.statement = theme.trim() || copied.theme;
     }
+    Engine.ensureCanonHistory(series, 'initial');
     await store.putSeries(series);
     await loadSeriesList();
     await openSeries(series.id);
@@ -2497,22 +3008,24 @@
 
   async function exportCurrent() {
     if (!state.series) return;
-    const payload = Engine.exportSeries({
-      series: state.series,
-      shots: state.shots,
-      assets: state.assets,
-      lore: state.lore
-    });
+    const seriesId = state.series.id;
+    const bundle = await store.readSeriesBundle(seriesId);
+    if (!bundle.series) return;
+    for (const shot of bundle.shots) {
+      const pending = state.volatileGenerations.get(shot.id);
+      if (pending && pending.asset.seriesId === seriesId) shot.pendingGeneration = structuredClone(pending);
+    }
+    const payload = Engine.exportSeries(bundle);
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = (state.series.title || 'series') + '-series.json';
+    link.download = (bundle.series.title || 'series') + '-series.json';
     document.body.append(link);
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    status('已导出系列包（含图片与提炼缓存）。', 'success');
+    if (isVisibleSeries(seriesId)) status('已导出系列包，包含生成历史、批次记录、图片、设定版本、草稿与系列参数；不包含提炼缓存或 API 凭据。', 'success');
   }
 
   async function importPackage(file) {
@@ -2521,13 +3034,15 @@
     catch { status('无法解析文件，请确认是本应用导出的 JSON 系列包。', 'error'); return; }
     const check = Engine.validateImport(payload);
     if (!check.ok) { status('导入失败：' + check.errors.join(' '), 'error'); return; }
-    const newId = uid('srs');
-    const restored = Engine.normalizeImportedSeries(payload, { newId });
-    restored.series.updatedAt = Date.now();
-    await store.replaceSeriesBundle(restored);
-    await loadSeriesList();
-    await openSeries(newId);
-    status('已导入系列「' + restored.series.title + '」，含 ' + restored.shots.length + ' 帧与 ' + restored.assets.length + ' 张图片。', 'success');
+    try {
+      const newId = uid('srs');
+      const restored = Engine.normalizeImportedSeries(payload, { newId });
+      restored.series.updatedAt = Date.now();
+      await store.replaceSeriesBundle(restored);
+      await loadSeriesList();
+      await openSeries(newId);
+      status('已导入系列「' + restored.series.title + '」，含 ' + restored.shots.length + ' 帧与 ' + restored.assets.length + ' 张图片。', 'success');
+    } catch (error) { status('导入失败，未写入部分数据：' + describeError(error), 'error'); }
   }
 
   // ---------------------------------------------------------------- promote existing work
@@ -2733,14 +3248,42 @@
     });
     $('#seriesCanonExtract').addEventListener('click', extractIntoCanon);
     $('#seriesCanonSave').addEventListener('click', saveCanonVersion);
+    $('#seriesCanonDiscard').addEventListener('click', discardCanonDraft);
+    $('#seriesParametersSave').addEventListener('click', () => saveGenerationParameters());
+    $('#seriesParametersCopy').addEventListener('click', () => saveGenerationParameters(true));
+    $('#seriesModel').addEventListener('change', () => parameterOptions({ ...seriesParameters(),
+      model: $('#seriesModel').value, size: $('#seriesSize').value, quality: $('#seriesQuality').value, responseFormat: $('#seriesResponseFormat').value }));
+    $('#seriesGenerationVersion').addEventListener('change', async event => {
+      const series = state.series;
+      const version = Number(event.target.value) || null;
+      try {
+        const saved = await store.updateSeries(series.id, stored => {
+          Engine.ensureCanonHistory(stored);
+          if (version && !stored.canonVersions.some(entry => entry.version === version)) throw new Error('此设定版本缺少快照。');
+          return { ...stored, generationVersion: version };
+        });
+        if (saved && isCurrentSeries(series.id)) { state.series.generationVersion = version; renderGenerationSettings(); renderInspector(); }
+      } catch (error) { if (isVisibleSeries(series.id)) status('选择版本失败：' + describeError(error), 'error'); }
+    });
+    $('#seriesVersionView').addEventListener('click', () => showVersion(Engine.selectedCanon(state.series).version));
     $('#seriesMatrixBuild').addEventListener('click', buildMatrixFrames);
     $('#seriesBatchStart').addEventListener('click', () => startBatch());
     $('#seriesBatchCancel').addEventListener('click', () => {
-      if (state.batch) { state.batch.cancelled = true; status('将在当前帧完成后停止。'); }
+      if (state.batch) {
+        state.batch.cancelled = true;
+        state.batch.run.status = 'stopping';
+        store.putRun(state.batch.run).catch(error => status('停止状态保存失败：' + describeError(error), 'error'));
+        status('将在当前帧完成后停止，未提交项会保留。');
+      }
     });
     $('#seriesBatchPause').addEventListener('click', () => {
       if (!state.batch) return;
       state.batch.paused = !state.batch.paused;
+      state.batch.run.status = state.batch.paused ? 'paused' : 'running';
+      store.putRun(state.batch.run).catch(error => {
+        if (state.batch) state.batch.cancelled = true;
+        status('暂停状态保存失败，批次将停止：' + describeError(error), 'error');
+      });
       renderBatchBar();
     });
 

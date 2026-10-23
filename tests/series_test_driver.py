@@ -56,7 +56,11 @@ def series_browser(name, init_script=None):
         assert not dev.errors, dev.errors
     except Exception:
         if dev:
-            print('Failure context:', ascii(dev.evaluate("({series:SeriesPage.state.series?.id,status:document.querySelector('#seriesStatus')?.textContent,open:SeriesPage.state.openRequest?.id})")))
+            print('Browser errors:', ascii(dev.errors))
+            try:
+                print('Failure context:', ascii(dev.evaluate("({series:window.SeriesPage?.state.series?.id,status:document.querySelector('#seriesStatus')?.textContent,busy:window.SeriesPage?.state.busy,batch:!!window.SeriesPage?.state.batch,starting:window.SeriesPage?.state.batchStarting,disabled:document.querySelector('[data-action=generate-shot]')?.disabled,parameters:document.querySelector('#seriesParametersStatus')?.textContent})")))
+            except RuntimeError:
+                print('Failure context unavailable during document navigation')
         raise
     finally:
         if dev:
@@ -97,3 +101,10 @@ def fixture_control(endpoints, route, **options):
     request = urllib.request.Request(url, data=json.dumps(options).encode(), headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.load(response)
+
+
+def reload_series(dev):
+    dev.evaluate('window.seriesReloadMarker=true')
+    dev.call('Page.reload')
+    dev.until("!window.seriesReloadMarker && Boolean(window.SeriesPage?.state.series) && typeof window.createSeriesStore==='function'")
+    dev.evaluate('window.testStore=createSeriesStore()')

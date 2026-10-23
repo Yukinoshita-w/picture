@@ -447,3 +447,170 @@ test('importing as a new series re-keys child records instead of overwriting the
   const overwritten = Engine.normalizeImportedSeries(payload, { newId: 'srs_1' });
   assert.equal(overwritten.shots[0].id, 'sht_1');
 });
+
+test('legacy series captures only its current version and preserves its existing anchor', () => {
+  const series = { id: 'old', canon: { version: 8, medium: '胶片', anchorSentence: '用户原有锚点。' } };
+  Engine.ensureCanonHistory(series);
+  assert.equal(series.canonVersions.length, 1);
+  assert.equal(series.canonVersions[0].version, 8);
+  assert.equal(series.canonVersions[0].source, 'legacy-current');
+  assert.equal(Engine.selectedCanon(series).anchorSentence, '用户原有锚点。');
+  assert.equal(series.canonVersions.find(entry => entry.version === 7), undefined);
+  Engine.ensureCanonHistory(series);
+  assert.equal(series.canonVersions.length, 1);
+});
+
+test('draft application changes compilation once and never mutates historical snapshots', () => {
+  const series = Engine.ensureCanonHistory({ canon: structuredClone(canon) }, 'initial');
+  const original = JSON.stringify(series);
+  series.canonDraft = { canon: { ...structuredClone(canon), medium: '水彩' } };
+  assert.match(Engine.selectedCanon(series).medium, /胶片/);
+  const applied = Engine.applyCanonDraft(series);
+  assert.equal(applied.canon.version, 2);
+  assert.equal(applied.canonVersions.length, 2);
+  assert.equal(applied.canonVersions[0].canon.medium, canon.medium);
+  assert.equal(applied.canonVersions[1].canon.medium, '水彩');
+  assert.equal(applied.canonDraft, null);
+  assert.equal(Engine.applyCanonDraft(applied).canon.version, 2);
+  assert.equal(series.canon.version, 1);
+  delete series.canonDraft;
+  assert.equal(JSON.stringify(series), original);
+  applied.canonDraft = { canon: Object.fromEntries(Object.entries(applied.canon).reverse()) };
+  const unchanged = Engine.applyCanonDraft(applied);
+  assert.equal(unchanged.canon.version, 2, 'property order must not create a new version');
+  applied.generationVersion = 1;
+  assert.equal(Engine.selectedCanon(applied).medium, canon.medium);
+});
+
+test('versioned package keeps drafts and provenance while remapping reference assets', () => {
+  let series = Engine.ensureCanonHistory({ id: 'original', title: '版本测试', canon: structuredClone(canon),
+    generationParameters: { model: 'gpt-image-1', size: '1024x1024', apiKey: 'secret', apiUrl: 'private' } }, 'initial');
+  series.canonDraft = { canon: { ...structuredClone(canon), medium: '水彩' } };
+  series = Engine.applyCanonDraft(series);
+  series.canonDraft = { canon: { ...structuredClone(series.canon), medium: '未采用' } };
+  const payload = Engine.exportSeries({ series, shots: [{ id: 'frame', seriesId: 'original',
+    result: { assetId: 'image', canonVersion: 1, canonSnapshotId: series.canonVersions[0].id,
+      parameters: { model: 'gpt-image-1', apiKey: 'secret' }, references: [{ assetId: 'ref' }] } }],
+    assets: [{ id: 'image', role: 'output' }, { id: 'ref', role: 'style' }] });
+  assert.equal(payload.version, 3);
+  assert.doesNotMatch(JSON.stringify(payload), /secret|apiKey|private/);
+  assert.equal(Engine.validateImport(payload).ok, true);
+  const restored = Engine.normalizeImportedSeries(payload, { newId: 'copy' });
+  assert.deepEqual(restored.series.canonVersions, series.canonVersions);
+  assert.equal(restored.series.canonDraft.canon.medium, '未采用');
+  assert.equal(restored.shots[0].result.references[0].assetId, restored.assets[1].id);
+  assert.equal(restored.shots[0].result.canonSnapshotId, series.canonVersions[0].id);
+  restored.series.canonVersions[0].canon.medium = 'copy edit';
+  assert.equal(payload.series.canonVersions[0].canon.medium, canon.medium);
+  const legacy = { format: 'prompt-studio-series', version: 1, series: { id: 'old', title: '旧包', canon: {} } };
+  assert.equal(Engine.validateImport(legacy).ok, true);
+});
+
+test('invalid snapshots and references fail import before any records are written', () => {
+  const base = Engine.exportSeries({ series: Engine.ensureCanonHistory({ id: 'a', title: 'A', canon: structuredClone(canon) }) });
+  for (const mutate of [
+    p => { p.series.canonVersions = {}; },
+    p => { p.series.canonVersions.push(structuredClone(p.series.canonVersions[0])); },
+    p => { p.series.generationVersion = 99; },
+    p => { p.series.canonDraft = { canon: [] }; },
+    p => { p.shots = [{ id: 'frame', result: { canonVersion: 1, canonSnapshotId: 'missing' } }]; },
+    p => { p.assets = [null]; },
+    p => { p.lore = {}; }
+  ]) {
+    const invalid = structuredClone(base);
+    mutate(invalid);
+    assert.equal(Engine.validateImport(invalid).ok, false);
+    assert.throws(() => Engine.normalizeImportedSeries(invalid));
+  }
+});
+
+test('series parameters keep model capabilities but exclude credentials and arbitrary settings', () => {
+  const custom = { mode: 'custom', sizes: ['1024x1024'], qualities: ['high'], responseFormats: ['url'],
+    maxCount: 1, maxReferences: 2, imageField: 'image[]', customSizes: true, apiKey: 'secret' };
+  const parameters = Engine.generationParameters({ model: ' custom-model ', size: '1024x1024', quality: 'high',
+    responseFormat: 'url', apiUrl: 'private', apiKey: 'secret', capabilities: custom });
+  assert.equal(parameters.model, 'custom-model');
+  assert.deepEqual(parameters.capabilities.sizes, ['1024x1024']);
+  assert.equal(parameters.capabilities.customSizes, true);
+  assert.doesNotMatch(JSON.stringify(parameters), /secret|apiKey|private/);
+  custom.sizes.push('512x512');
+  assert.deepEqual(parameters.capabilities.sizes, ['1024x1024']);
+});
+
+test('legacy adopted result becomes one immutable history entry without changing its resource ID', () => {
+  const shot = { result: { assetId: 'old', parameters: { size: '1024x1024' } } };
+  const history = Engine.resultHistory(shot);
+  assert.deepEqual(history, [shot.result]);
+  history[0].parameters.size = 'changed';
+  assert.equal(shot.result.parameters.size, '1024x1024');
+  assert.equal(Engine.resultHistory({ ...shot, generationHistory: [shot.result] }).length, 1);
+});
+
+test('historical reference protection includes frames, old results, pending images, defaults and resumable runs', () => {
+  const ref = { assetId: 'image' };
+  const shots = [{ id: 'a', code: 'S01', references: [ref] },
+    { id: 'b', code: 'S02', generationHistory: [{ assetId: 'other', references: [ref] }] },
+    { id: 'c', code: 'S03', pendingGeneration: { result: { references: [ref] } } }];
+  const users = Engine.resultUsers('image', shots, { gallery: { defaults: { style: 'image' } } },
+    [{ id: 'r', items: [{ status: 'pending', shot: { references: [ref] } }] }]);
+  assert.deepEqual(users, ['S01', 'S02', 'S03', '系列默认参考图', '批次 r']);
+});
+
+test('batch accounting never counts skipped, cancelled, unknown or pending saves as success', () => {
+  const states = ['success', 'failed', 'skipped', 'cancelled', 'unknown', 'pending-save', 'pending', 'submitting'];
+  const summary = Engine.runSummary({ items: states.map(status => ({ status })) });
+  assert.equal(summary.total, 8);
+  for (const status of states) assert.equal(summary[status], 1);
+});
+
+test('recovery reconciles committed images and pending downloads without resubmitting unknown requests', () => {
+  const run = { id: 'r', status: 'running', items: ['a', 'b', 'c', 'd', 'e'].map(id => ({ shot: { id }, status: id === 'e' ? 'pending' : 'submitting' })) };
+  const recovered = Engine.recoverRun(run, [
+    { id: 'a', generationHistory: [{ assetId: 'old-adoption', runId: 'r' }] },
+    { id: 'b', pendingGeneration: { result: { runId: 'r' } } }
+  ]);
+  assert.deepEqual(recovered.items.map(item => item.status), ['success', 'pending-save', 'unknown', 'unknown', 'pending']);
+  assert.equal(recovered.status, 'interrupted');
+  assert.equal(run.items[0].status, 'submitting');
+});
+
+test('history package remaps all result resources and references and removes stored credentials', () => {
+  const result = { assetId: 'image', runId: 'run', references: [{ assetId: 'ref' }], parameters: { model: 'm', apiKey: 'secret' } };
+  const payload = Engine.exportSeries({ series: { id: 'a', title: 'A', canon },
+    shots: [{ id: 's', seriesId: 'a', result, generationHistory: [result] }], assets: [{ id: 'image' }, { id: 'ref' }] });
+  assert.doesNotMatch(JSON.stringify(payload), /secret|apiKey/);
+  const restored = Engine.normalizeImportedSeries(payload, { newId: 'copy' });
+  assert.equal(restored.shots[0].result.assetId, 'image-copy');
+  assert.equal(restored.shots[0].generationHistory[0].references[0].assetId, 'ref-copy');
+  assert.equal(restored.shots[0].result.runId, 'run-copy');
+});
+
+test('portable batch snapshots preserve safe conditions and mark imported submissions unknown', () => {
+  const series = { id: 'a', title: 'A', canon, generationParameters: { model: 'm', apiKey: 'secret' } };
+  const shot = { id: 's', seriesId: 'a', subject: 'subject' };
+  const run = { id: 'run', seriesId: 'a', status: 'running', context: { series, assets: [], lore: [] },
+    items: [{ shot, status: 'submitting', actual: { parameters: { model: 'm', apiKey: 'secret' }, references: [] } }] };
+  const payload = Engine.exportSeries({ series, shots: [shot], runs: [run] });
+  assert.equal(payload.version, 3);
+  assert.equal(Engine.validateImport(payload).ok, true);
+  assert.doesNotMatch(JSON.stringify(payload), /secret|apiKey/);
+  const restored = Engine.normalizeImportedSeries(payload, { newId: 'copy' });
+  assert.equal(restored.runs[0].id, 'run-copy');
+  assert.equal(restored.runs[0].items[0].status, 'unknown');
+  assert.equal(restored.runs[0].items[0].shot.id, restored.shots[0].id);
+});
+
+test('malformed history and batch records fail import before writing', () => {
+  const base = Engine.exportSeries({ series: { id: 'a', title: 'A', canon }, shots: [{ id: 's', seriesId: 'a' }] });
+  for (const mutate of [
+    p => { p.shots[0].generationHistory = {}; },
+    p => { p.shots[0].generationHistory = [{ assetId: 'x' }, { assetId: 'x' }]; },
+    p => { p.runs = [{ id: 'r', seriesId: 'b' }]; },
+    p => { p.runs = {}; },
+    p => { p.shots = [null]; }
+  ]) {
+    const payload = structuredClone(base); mutate(payload);
+    assert.equal(Engine.validateImport(payload).ok, false);
+    assert.throws(() => Engine.normalizeImportedSeries(payload));
+  }
+});

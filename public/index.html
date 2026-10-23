@@ -205,6 +205,24 @@
             </nav>
           </header>
 
+          <details class="series-generation-settings" id="seriesGenerationSettings">
+            <summary id="seriesGenerationSummary">系列生成条件</summary>
+            <p class="series-hint" id="seriesParametersNotice"></p>
+            <div class="series-parameter-grid">
+              <label>图片模型<input id="seriesModel" type="text" autocomplete="off"></label>
+              <label>尺寸<select id="seriesSize"></select></label>
+              <label>画质<select id="seriesQuality"></select></label>
+              <label>返回格式<select id="seriesResponseFormat"></select></label>
+              <label>生图设定版本<select id="seriesGenerationVersion"></select></label>
+            </div>
+            <div class="series-parameter-actions">
+              <button type="button" class="button secondary" id="seriesParametersSave">保存系列参数</button>
+              <button type="button" class="text-action" id="seriesParametersCopy">从创作页更新参数</button>
+              <button type="button" class="text-action" id="seriesVersionView">查看所选设定版本</button>
+            </div>
+            <p class="series-hint" id="seriesParametersStatus" role="status"></p>
+          </details>
+
           <div class="series-view" id="seriesViewOutline" data-series-view="outline">
             <div class="series-outline-toolbar">
               <p class="series-hint">一句话写不出的内容，可以先放进「圣经」；一帧说不完的故事，就多建几帧。</p>
@@ -256,6 +274,10 @@
                 </div>
               </div>
             </section>
+            <details class="series-runs" id="seriesRunsPanel" hidden>
+              <summary>批次记录与恢复</summary>
+              <div id="seriesRunsList"></div>
+            </details>
             <div class="series-shot-list" id="seriesShotList"></div>
             <p class="series-empty" id="seriesShotsEmpty" hidden>还没有帧。点右上角「＋ 添加一帧」，或让模型按主题建议一份帧清单。</p>
           </div>
@@ -288,10 +310,11 @@
 
           <div class="series-view" id="seriesViewCanon" data-series-view="canon" hidden>
             <div class="series-canon-toolbar">
-              <p class="series-hint">圣经是所有帧共享的视觉定义。改动锁定字段会创建新版本，已生成的帧保留原版本号。</p>
+              <p class="series-hint">编辑会自动保存为草稿；应用后才采用新版本。可变轴独立保存，立即用于矩阵。</p>
               <div class="series-canon-actions">
                 <button type="button" class="button secondary" id="seriesCanonExtract">从主题提炼</button>
-                <button type="button" class="button secondary" id="seriesCanonSave">保存为新手版本</button>
+                <button type="button" class="button secondary" id="seriesCanonSave" disabled>应用草稿为新版本</button>
+                <button type="button" class="text-action" id="seriesCanonDiscard" disabled>放弃草稿</button>
               </div>
             </div>
             <div class="series-canon-body">
@@ -342,7 +365,7 @@
         <div class="series-batch-actions">
           <label class="series-batch-price">单价 <input id="seriesBatchPrice" type="number" min="0" step="0.001" placeholder="可选"></label>
           <button type="button" class="button secondary" id="seriesBatchPause" hidden>暂停</button>
-          <button type="button" class="button secondary" id="seriesBatchCancel">取消</button>
+          <button type="button" class="button secondary" id="seriesBatchCancel">当前帧结束后停止</button>
         </div>
       </div>
 

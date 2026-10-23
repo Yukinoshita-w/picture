@@ -108,11 +108,11 @@
     }
 
     function readSeriesBundle(id) {
-      return guarded(() => withTransaction(['series', 'shots', 'assets', 'lore'], 'readonly', (tx, output) => {
+      return guarded(() => withTransaction(['series', 'shots', 'assets', 'lore', 'runs'], 'readonly', (tx, output) => {
         const bundle = output.value = {};
         const series = tx.objectStore('series').get(id);
         series.onsuccess = () => { bundle.series = series.result; };
-        for (const name of ['shots', 'assets', 'lore']) {
+        for (const name of ['shots', 'assets', 'lore', 'runs']) {
           const request = tx.objectStore(name).index('seriesId').getAll(IDBKeyRange.only(id));
           request.onsuccess = () => { bundle[name] = request.result; };
         }
@@ -230,10 +230,10 @@
       return guarded(() => withStore('shots', 'readonly', store => store.get(id)));
     }
 
-    // Publish the image, its frame association and replacement cleanup together.
+    // Publish the image and immutable history together, retaining every older image.
     // Nothing is returned to the UI until the entire transaction has committed.
     function saveGeneration({ seriesId, shotId, asset, result, pendingId }) {
-      return guarded(() => withTransaction(['series', 'shots', 'assets'], 'readwrite', (tx, output) => {
+      return guarded(() => withTransaction(['series', 'shots', 'assets', 'runs'], 'readwrite', (tx, output) => {
         output.value = null;
         const owner = tx.objectStore('series').get(seriesId);
         owner.onsuccess = () => {
@@ -250,22 +250,25 @@
                 throw new Error('生成图片与目标帧不匹配，未保存。');
               }
               const assets = tx.objectStore('assets');
-              const previousAssetId = shot.result?.assetId;
-              const saved = { ...shot, result, status: 'done', canonVersion: result.canonVersion ?? shot.canonVersion, updatedAt: Date.now() };
+              const history = Engine.resultHistory(shot);
+              const sequence = Math.max(shot.generationSequence || 0, ...history.map((entry, index) => entry.sequence || index + 1)) + 1;
+              const savedResult = { ...result, sequence };
+              const saved = { ...shot, result: savedResult, generationSequence: sequence,
+                generationHistory: [...history, structuredClone(savedResult)],
+                status: 'done', canonVersion: result.canonVersion ?? shot.canonVersion, updatedAt: Date.now() };
               if (pendingId) saved.pendingGeneration = null;
               // add() also prevents a colliding ID from overwriting another image.
               assets.add(asset);
               shots.put(saved);
               output.value = { shot: saved, removedAssetId: null };
-              if (previousAssetId) {
-                const previous = assets.get(previousAssetId);
-                previous.onsuccess = () => {
-                  const old = previous.result;
-                  if (old?.seriesId !== seriesId || old.role !== 'output' || (old.shotId && old.shotId !== shotId)) return;
-                  try {
-                    assets.delete(previousAssetId);
-                    output.value.removedAssetId = previousAssetId;
-                  } catch (error) { output.error = error; tx.abort(); }
+              if (result.runId) {
+                const request = tx.objectStore('runs').get(result.runId);
+                request.onsuccess = () => {
+                  const run = request.result;
+                  const item = run?.items?.find(entry => entry.shot.id === shotId);
+                  if (run?.seriesId !== seriesId || !item) return;
+                  item.status = 'success'; item.assetId = asset.id; item.error = ''; run.updatedAt = Date.now();
+                  tx.objectStore('runs').put(run);
                 };
               }
             } catch (error) { output.error = error; tx.abort(); }
@@ -273,6 +276,48 @@
         };
       }));
     }
+
+    function editGeneration(seriesId, shotId, assetId, remove = false) {
+      return guarded(() => withTransaction(['series', 'shots', 'assets', 'runs'], 'readwrite', (tx, output) => {
+        const owner = tx.objectStore('series').get(seriesId);
+        const all = tx.objectStore('shots').index('seriesId').getAll(IDBKeyRange.only(seriesId));
+        const runs = tx.objectStore('runs').index('seriesId').getAll(IDBKeyRange.only(seriesId));
+        runs.onsuccess = () => {
+          try {
+            const shot = all.result.find(entry => entry.id === shotId);
+            if (!owner.result || !shot) throw new Error('目标帧已不存在。');
+            const history = Engine.resultHistory(shot);
+            const result = history.find(entry => entry.assetId === assetId);
+            if (!result) throw new Error('生成版本已不存在。');
+            const image = tx.objectStore('assets').get(assetId);
+            image.onsuccess = () => {
+              const asset = image.result;
+              if ((!remove && !asset) || (asset && (asset.seriesId !== seriesId || (asset.shotId && asset.shotId !== shotId)))) {
+                output.error = new Error('生成图片资源缺失或归属不匹配。'); tx.abort();
+              }
+            };
+            if (remove) {
+              if (shot.result?.assetId === assetId) throw new Error('不能清理正在采用的版本，请先切换采用版本。');
+              const affected = Engine.resultUsers(assetId, all.result, owner.result, runs.result);
+              if (affected.length) throw new Error('此版本仍被引用：' + affected.join('、'));
+              shot.generationHistory = history.filter(entry => entry.assetId !== assetId);
+              tx.objectStore('assets').delete(assetId);
+            } else {
+              shot.generationHistory = history;
+              shot.result = structuredClone(result);
+              shot.canonVersion = result.canonVersion ?? shot.canonVersion;
+              shot.status = shot.pendingGeneration ? 'pending-save' : 'done';
+            }
+            shot.updatedAt = Date.now();
+            tx.objectStore('shots').put(shot);
+            output.value = shot;
+          } catch (error) { output.error = error; tx.abort(); }
+        };
+      }));
+    }
+
+    function adoptGeneration(seriesId, shotId, assetId) { return editGeneration(seriesId, shotId, assetId); }
+    function deleteGeneration(seriesId, shotId, assetId) { return editGeneration(seriesId, shotId, assetId, true); }
 
     function putShots(shots) {
       return guarded(() => withStore('shots', 'readwrite', store => {
@@ -283,6 +328,26 @@
 
     function deleteShot(id) {
       return guarded(() => withStore('shots', 'readwrite', store => store.delete(id)));
+    }
+
+    function deleteShotWithHistory(seriesId, shotId) {
+      return guarded(() => withTransaction(['series', 'shots', 'assets', 'runs'], 'readwrite', (tx, output) => {
+        const owner = tx.objectStore('series').get(seriesId);
+        const all = tx.objectStore('shots').index('seriesId').getAll(IDBKeyRange.only(seriesId));
+        const runs = tx.objectStore('runs').index('seriesId').getAll(IDBKeyRange.only(seriesId));
+        runs.onsuccess = () => {
+          try {
+            const shot = all.result.find(entry => entry.id === shotId);
+            if (!owner.result || !shot) return;
+            for (const result of Engine.resultHistory(shot)) {
+              const users = Engine.resultUsers(result.assetId, all.result.filter(entry => entry.id !== shotId), owner.result, runs.result);
+              if (users.length) throw new Error('图片仍被引用，无法删除此帧：' + users.join('、'));
+            }
+            for (const result of Engine.resultHistory(shot)) tx.objectStore('assets').delete(result.assetId);
+            tx.objectStore('shots').delete(shotId);
+          } catch (error) { output.error = error; tx.abort(); }
+        };
+      }));
     }
 
     // ---------------------------------------------------------------- assets
@@ -345,8 +410,17 @@
     }
 
     function putRun(run) {
-      return guarded(() => withStore('runs', 'readwrite', store => store.put(run)));
+      return guarded(() => withTransaction(['series', 'runs'], 'readwrite', (tx, output) => {
+        const owner = tx.objectStore('series').get(run.seriesId);
+        owner.onsuccess = () => {
+          if (!owner.result) { output.error = new Error('批次所属系列已不存在。'); tx.abort(); return; }
+          tx.objectStore('runs').put(run); output.value = run;
+        };
+      }));
     }
+
+    function getRun(id) { return guarded(() => withStore('runs', 'readonly', store => store.get(id))); }
+    function updateRun(id, seriesId, edit) { return patchExisting('runs', id, seriesId, edit); }
 
     function getExtraction(id) {
       return guarded(() => withStore('extractions', 'readonly', store => store.get(id)));
@@ -365,13 +439,13 @@
 
     // ---------------------------------------------------------------- bulk
 
-    function replaceSeriesBundle({ series, shots = [], assets = [], lore = [] }) {
-      return guarded(async () => {
-        await withStore('series', 'readwrite', store => store.put(series));
-        if (shots.length) await withStore('shots', 'readwrite', store => { for (const shot of shots) store.put(shot); return null; });
-        if (assets.length) await withStore('assets', 'readwrite', store => { for (const asset of assets) store.put(asset); return null; });
-        if (lore.length) await withStore('lore', 'readwrite', store => { for (const item of lore) store.put(item); return null; });
-      });
+    function replaceSeriesBundle({ series, shots = [], assets = [], lore = [], runs = [] }) {
+      return guarded(() => withTransaction(['series', 'shots', 'assets', 'lore', 'runs'], 'readwrite', tx => {
+        tx.objectStore('series').put(series);
+        for (const [name, records] of [['shots', shots], ['assets', assets], ['lore', lore], ['runs', runs]]) {
+          for (const record of records) tx.objectStore(name).put(record);
+        }
+      }));
     }
 
     function estimateUsage() {
@@ -393,12 +467,15 @@
       listShots,
       getShot,
       saveGeneration,
+      adoptGeneration,
+      deleteGeneration,
       putShot,
       putShots,
       appendShots,
       appendMatrixShots,
       updateShot,
       deleteShot,
+      deleteShotWithHistory,
       listAssets,
       getAsset,
       putAsset,
@@ -410,6 +487,8 @@
       deleteLore,
       listRuns,
       putRun,
+      getRun,
+      updateRun,
       getExtraction,
       putExtraction,
       deleteExtraction,

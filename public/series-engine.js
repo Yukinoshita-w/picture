@@ -28,6 +28,62 @@
 
   const AXIS_LIMIT = 200;
 
+  // Optional fields keep version-1 databases and existing series packages readable.
+  function ensureCanonHistory(series, source = 'legacy-current') {
+    series.canonVersions ||= [];
+    const version = series.canon.version || 1;
+    if (!series.canonVersions.some(entry => entry.version === version)) {
+      const canon = structuredClone(series.canon);
+      canon.version = version;
+      canon.anchorSentence ||= renderAnchor(canon);
+      series.canonVersions.push({ id: 'canon-' + version + '-' + hashString(JSON.stringify(canon)),
+        version, canon, createdAt: Date.now(), source });
+    }
+    return series;
+  }
+
+  function selectedCanon(series) {
+    const version = series.generationVersion || series.canon.version || 1;
+    return series.canonVersions?.find(entry => entry.version === version)?.canon || series.canon;
+  }
+
+  function canonContent(canon) {
+    const { version, anchorSentence, ...content } = canon;
+    const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+    return JSON.stringify(stable(content));
+  }
+
+  function applyCanonDraft(series) {
+    const next = ensureCanonHistory(structuredClone(series));
+    if (!next.canonDraft) return next;
+    const draft = next.canonDraft;
+    if (canonContent(draft.canon) !== canonContent(next.canon)) {
+      const version = Math.max(next.canon.version || 1, ...next.canonVersions.map(entry => entry.version)) + 1;
+      next.canon = structuredClone(draft.canon);
+      next.canon.version = version;
+      next.canon.anchorSentence = renderAnchor(next.canon);
+      ensureCanonHistory(next, 'applied');
+      next.generationVersion = null;
+    }
+    if (draft.theme) next.theme = structuredClone(draft.theme);
+    next.canonDraft = null;
+    next.canonDirty = false;
+    next.updatedAt = Date.now();
+    return next;
+  }
+
+  function generationParameters(value = {}) {
+    const capabilities = value.capabilities?.mode === 'custom' ? {
+      mode: 'custom', sizes: value.capabilities.sizes?.slice(), qualities: value.capabilities.qualities?.slice(),
+      responseFormats: value.capabilities.responseFormats?.slice(), maxCount: value.capabilities.maxCount,
+      maxReferences: value.capabilities.maxReferences, imageField: value.capabilities.imageField,
+      customSizes: value.capabilities.customSizes === true
+    } : { mode: 'auto' };
+    return { model: String(value.model || '').trim(), size: value.size || 'default',
+      quality: value.quality || 'default', responseFormat: value.responseFormat || 'auto', capabilities };
+  }
+
   function clean(value) {
     return String(value === undefined || value === null ? '' : value).replace(/\s+/g, ' ').trim();
   }
@@ -480,15 +536,67 @@
 
   // ---------------------------------------------------------------- import/export
 
-  const EXPORT_VERSION = 1;
+  function resultHistory(shot) {
+    const results = new Map();
+    for (const result of [...(Array.isArray(shot?.generationHistory) ? shot.generationHistory : []), shot?.result]) {
+      if (result?.assetId && !results.has(result.assetId)) results.set(result.assetId, structuredClone(result));
+    }
+    return [...results.values()];
+  }
 
-  function exportSeries({ series, shots = [], assets = [], lore = [] }) {
+  function resultUsers(assetId, shots, series = {}, runs = []) {
+    const users = [];
+    for (const shot of shots) {
+      const references = [...(shot.references || []), ...resultHistory(shot).flatMap(result => result.references || []),
+        ...(shot.pendingGeneration?.result?.references || [])];
+      if (references.some(ref => ref.assetId === assetId)) users.push(shot.code || shot.title || shot.id);
+    }
+    if (Object.values(series.gallery?.defaults || {}).includes(assetId)) users.push('系列默认参考图');
+    for (const run of runs) {
+      if (run.items?.some(item => ['pending', 'submitting', 'unknown', 'failed', 'cancelled'].includes(item.status)
+        && item.shot.references?.some(ref => ref.assetId === assetId))) users.push('批次 ' + run.id);
+      const source = run.items?.find(item => item.assetId === assetId);
+      if (source && run.items.some(item => ['pending', 'submitting', 'unknown', 'failed', 'cancelled'].includes(item.status)
+        && item.shot.references?.some(ref => ref.slot === 'previous'
+          && run.context?.assets?.some(asset => asset.id === ref.assetId && asset.shotId === source.shot.id)))) users.push('批次 ' + run.id);
+    }
+    return [...new Set(users)];
+  }
+
+  function runSummary(run) {
+    const counts = { total: run.items.length, success: 0, failed: 0, skipped: 0, cancelled: 0, pending: 0, submitting: 0, unknown: 0, 'pending-save': 0 };
+    for (const item of run.items) if (Object.hasOwn(counts, item.status)) counts[item.status]++;
+    return counts;
+  }
+
+  function recoverRun(record, shots) {
+    const run = structuredClone(record);
+    for (const item of run.items) {
+      const shot = shots.find(entry => entry.id === item.shot.id);
+      const result = shot && resultHistory(shot).find(entry => entry.runId === run.id);
+      if (result) { item.status = 'success'; item.assetId = result.assetId; item.error = ''; }
+      else if (shot?.pendingGeneration?.result?.runId === run.id) item.status = 'pending-save';
+      else if (item.status === 'submitting') { item.status = 'unknown'; item.error = '请求已提交，但结果尚未确认。请核对供应商记录，不会自动重发。'; }
+      else if (item.status === 'pending-save' && !shot?.pendingGeneration) { item.status = 'skipped'; item.error = '待保存结果已放弃或目标已删除，未重发。'; }
+    }
+    if (['running', 'paused', 'stopping'].includes(run.status)) run.status = 'interrupted';
+    return run;
+  }
+
+  const EXPORT_VERSION = 3;
+
+  function exportSeries({ series, shots = [], assets = [], lore = [], runs = [] }) {
     return {
       format: 'prompt-studio-series',
       version: EXPORT_VERSION,
       exportedAt: Date.now(),
-      series,
-      shots,
+      series: { ...structuredClone(series), ...(series.generationParameters ? { generationParameters: generationParameters(series.generationParameters) } : {}) },
+      shots: shots.map(shot => ({ ...structuredClone(shot),
+        generationHistory: resultHistory(shot).map(result => ({ ...result,
+          ...(result.parameters ? { parameters: { ...generationParameters(result.parameters), n: 1 } } : {}) })),
+        ...(shot.result?.parameters ? { result: { ...shot.result, parameters: { ...generationParameters(shot.result.parameters), n: 1 } } } : {}),
+        ...(shot.pendingGeneration?.result?.parameters ? { pendingGeneration: { ...shot.pendingGeneration,
+          result: { ...shot.pendingGeneration.result, parameters: { ...generationParameters(shot.pendingGeneration.result.parameters), n: 1 } } } } : {}) })),
       assets: assets.map(asset => ({
         id: asset.id,
         seriesId: asset.seriesId,
@@ -503,7 +611,13 @@
         analysis: asset.analysis,
         data: asset.data || null
       })),
-      lore
+      lore,
+      runs: runs.filter(run => Array.isArray(run.items)).map(run => {
+        const snapshot = exportSeries({ ...run.context, shots: run.items.map(item => item.shot) });
+        return { ...structuredClone(run), context: { series: snapshot.series, assets: snapshot.assets, lore: snapshot.lore },
+          items: run.items.map((item, index) => ({ ...structuredClone(item), shot: snapshot.shots[index],
+            ...(item.actual ? { actual: { ...item.actual, parameters: generationParameters(item.actual.parameters) } } : {}) })) };
+      })
     };
   }
 
@@ -521,10 +635,38 @@
       if (!clean(series.id)) errors.push('系列缺少 id。');
       if (!clean(series.title)) errors.push('系列缺少标题。');
       if (!series.canon || typeof series.canon !== 'object') errors.push('系列缺少风格圣经。');
+      if (series.canonDraft && (!series.canonDraft.canon || typeof series.canonDraft.canon !== 'object' || Array.isArray(series.canonDraft.canon))) errors.push('设定草稿格式无效。');
+      if (series.canonVersions !== undefined) {
+        const versions = series.canonVersions;
+        if (!Array.isArray(versions) || versions.length > 10000 || versions.some(entry => !entry || !clean(entry.id)
+          || !Number.isInteger(entry.version) || entry.version < 1 || !entry.canon || entry.canon.version !== entry.version)
+          || new Set(versions.map(entry => entry.version)).size !== versions.length
+          || new Set(versions.map(entry => entry.id)).size !== versions.length) errors.push('设定版本快照无效或重复。');
+        else if (series.generationVersion && !versions.some(entry => entry.version === series.generationVersion)) errors.push('所选生成版本缺少快照。');
+        else if (versions.length && !versions.some(entry => entry.version === (series.canon?.version || 1))) errors.push('当前采用的设定版本缺少快照。');
+      }
+      if (series.generationVersion && !Array.isArray(series.canonVersions)) errors.push('所选生成版本缺少快照。');
+      if (series.generationParameters && (typeof series.generationParameters !== 'object' || Array.isArray(series.generationParameters))) errors.push('系列参数格式无效。');
     }
     if (payload.shots !== undefined && !Array.isArray(payload.shots)) errors.push('shots 必须是数组。');
     if (payload.assets !== undefined && !Array.isArray(payload.assets)) errors.push('assets 必须是数组。');
+    if (payload.lore !== undefined && !Array.isArray(payload.lore)) errors.push('lore 必须是数组。');
+    if (payload.runs !== undefined && !Array.isArray(payload.runs)) errors.push('runs 必须是数组。');
+    for (const name of ['shots', 'assets', 'lore']) {
+      if (!Array.isArray(payload[name])) continue;
+      if (payload[name].some(record => !record || typeof record !== 'object' || !clean(record.id))
+        || new Set(payload[name].map(record => record?.id)).size !== payload[name].length) errors.push(name + ' 存在无效记录或重复 ID。');
+    }
     if (Array.isArray(payload.shots)) for (const shot of payload.shots) {
+      if (!shot || typeof shot !== 'object') continue;
+      if (shot.generationHistory !== undefined && (!Array.isArray(shot.generationHistory)
+        || shot.generationHistory.some(result => !result || !clean(result.assetId))
+        || new Set(shot.generationHistory.map(result => result.assetId)).size !== shot.generationHistory.length)) {
+        errors.push('生成历史格式无效或存在重复版本。'); continue;
+      }
+      for (const result of [...(shot.generationHistory || []), shot?.result, shot?.pendingGeneration?.result]) {
+        if (result?.canonSnapshotId && (!Array.isArray(series?.canonVersions) || !series.canonVersions.some(entry => entry.id === result.canonSnapshotId && entry.version === result.canonVersion))) errors.push('生成结果关联的设定快照不存在。');
+      }
       const pending = shot?.pendingGeneration;
       if (!pending) continue;
       const asset = pending.asset;
@@ -535,6 +677,18 @@
         || (result?.references !== undefined && (!Array.isArray(result.references)
           || result.references.some(entry => !entry || typeof entry !== 'object' || !clean(entry.assetId))))) {
         errors.push('待保存图片记录无效或与目标帧不匹配。');
+      }
+    }
+    if (Array.isArray(payload.runs)) {
+      const states = ['pending', 'submitting', 'success', 'failed', 'skipped', 'cancelled', 'unknown', 'pending-save'];
+      if (new Set(payload.runs.map(run => run?.id)).size !== payload.runs.length) errors.push('批次 ID 重复。');
+      for (const run of payload.runs) {
+        if (!clean(run?.id) || run.seriesId !== series?.id || run.context?.series?.id !== series?.id
+          || !Array.isArray(run.items) || run.items.some(item => !item?.shot?.id || item.shot.seriesId !== series?.id || !states.includes(item.status))
+          || new Set(run.items.map(item => item.shot.id)).size !== run.items.length) { errors.push('批次记录格式或归属无效。'); continue; }
+        const context = { series: run.context.series, assets: run.context.assets, lore: run.context.lore,
+          shots: run.items.map(item => item.shot), format: payload.format, version: payload.version };
+        if (!validateImport(context).ok) errors.push('批次生成条件快照无效。');
       }
     }
     return { ok: errors.length === 0, errors };
@@ -565,8 +719,15 @@
         ? shot.references.map(entry => (entry ? { ...entry, assetId: remap(entry.assetId) } : entry))
         : [],
       loreRefs: Array.isArray(shot.loreRefs) ? shot.loreRefs.map(remap) : [],
+      generationHistory: resultHistory(shot).map(result => ({ ...result, assetId: remap(result.assetId),
+        ...(result.runId ? { runId: remap(result.runId) } : {}),
+        ...(result.parameters ? { parameters: { ...generationParameters(result.parameters), n: 1 } } : {}),
+        references: (result.references || []).map(entry => ({ ...entry, assetId: remap(entry.assetId) })) })),
       result: shot.result && shot.result.assetId
-        ? { ...shot.result, assetId: remap(shot.result.assetId) }
+        ? { ...shot.result, assetId: remap(shot.result.assetId),
+          ...(shot.result.runId ? { runId: remap(shot.result.runId) } : {}),
+          ...(shot.result.parameters ? { parameters: { ...generationParameters(shot.result.parameters), n: 1 } } : {}),
+          references: (shot.result.references || []).map(entry => ({ ...entry, assetId: remap(entry.assetId) })) }
         : shot.result,
       ...(shot.pendingGeneration ? { pendingGeneration: {
         ...shot.pendingGeneration,
@@ -574,19 +735,33 @@
         asset: { ...shot.pendingGeneration.asset, id: remap(shot.pendingGeneration.asset.id),
           seriesId: id, shotId: remap(shot.id) },
         result: { ...shot.pendingGeneration.result, assetId: remap(shot.pendingGeneration.result.assetId),
+          ...(shot.pendingGeneration.result.runId ? { runId: remap(shot.pendingGeneration.result.runId) } : {}),
+          ...(shot.pendingGeneration.result.parameters ? { parameters: { ...generationParameters(shot.pendingGeneration.result.parameters), n: 1 } } : {}),
           references: (shot.pendingGeneration.result.references || []).map(entry => ({ ...entry, assetId: remap(entry.assetId) })) }
       } } : {})
     }));
 
     const gallery = payload.series.gallery;
     const series = {
-      ...payload.series,
+      ...structuredClone(payload.series),
       id,
+      ...(payload.series.generationParameters ? { generationParameters: generationParameters(payload.series.generationParameters) } : {}),
       gallery: gallery && gallery.defaults
         ? { ...gallery, defaults: Object.fromEntries(Object.entries(gallery.defaults).map(([slot, assetId]) => [slot, remap(assetId)])) }
         : gallery
     };
-    return { series, shots, assets, lore };
+    const runs = (payload.runs || []).map(record => {
+      const snapshot = normalizeImportedSeries({ series: record.context.series, assets: record.context.assets, lore: record.context.lore, shots: record.items.map(item => item.shot),
+        format: payload.format, version: payload.version }, { newId: id });
+      const run = { ...record, id: remap(record.id), seriesId: id,
+        context: { series: snapshot.series, assets: snapshot.assets, lore: snapshot.lore },
+        items: record.items.map((item, index) => ({ ...item, shot: snapshot.shots[index],
+          ...(item.assetId ? { assetId: remap(item.assetId) } : {}),
+          ...(item.actual ? { actual: { ...item.actual, parameters: generationParameters(item.actual.parameters),
+            references: (item.actual.references || []).map(ref => ({ ...ref, assetId: remap(ref.assetId) })) } } : {}) })) };
+      return recoverRun(run, shots);
+    });
+    return { series, shots, assets, lore, runs };
   }
 
   const api = {
@@ -600,6 +775,14 @@
     BUDGET,
     BUDGET_TARGET,
     EXPORT_VERSION,
+    resultHistory,
+    resultUsers,
+    runSummary,
+    recoverRun,
+    ensureCanonHistory,
+    selectedCanon,
+    applyCanonDraft,
+    generationParameters,
     renderAnchor,
     applyTerms,
     renderShotSection,

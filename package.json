@@ -15,7 +15,10 @@
     "test:series-models": "python tests/series_models_smoke.py",
     "test:series-storage": "python tests/series_storage_smoke.py",
     "test:series-remote": "python tests/series_remote_smoke.py",
-    "test:series-matrix": "python tests/series_matrix_smoke.py"
+    "test:series-matrix": "python tests/series_matrix_smoke.py",
+    "test:series-versions": "python tests/series_versions_smoke.py",
+    "test:series-history": "python tests/series_history_smoke.py",
+    "test:series-batch": "python tests/series_batch_smoke.py"
   },
   "engines": {
     "node": ">=20"

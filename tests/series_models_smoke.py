@@ -128,7 +128,8 @@ def main():
         b_before = mark_b()
         release('reduce')
         unchanged_b(b_before)
-        assert dev.evaluate("testStore.getSeries('a').then(s=>s.canon.version)") == 2
+        assert dev.evaluate("testStore.getSeries('a').then(s=>s.canon.version)") == 1
+        assert dev.evaluate("testStore.getSeries('a').then(s=>Boolean(s.canonDraft?.canon.medium))")
         assert dev.evaluate("testStore.getSeries('b').then(s=>s.canon.version)") == 1
         dev.until("!document.querySelector('#seriesExtractDialog').open")
 
@@ -140,7 +141,7 @@ def main():
         held('extract')
         dev.evaluate("document.querySelector('#seriesExtractClose').click()")
         release('extract')
-        assert dev.evaluate("testStore.getSeries('a').then(s=>s.canon.version)") == 2
+        assert dev.evaluate("testStore.getSeries('a').then(s=>s.canon.version)") == 1
         assert '暂停' in dev.evaluate("document.querySelector('#seriesStatus').textContent")
 
         def split():

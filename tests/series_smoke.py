@@ -102,6 +102,10 @@ def main():
         dev.until("document.querySelector('#seriesAnchorPreview').textContent.includes('35mm')")
         anchor = dev.evaluate("document.querySelector('#seriesAnchorPreview').textContent")
         assert '钠灯' in anchor or '湿沥青' in anchor, anchor
+        assert dev.evaluate("SeriesPage.state.series.canon.version") == 1
+        assert dev.evaluate("SeriesPage.state.series.canonDraft !== null")
+        dev.evaluate("document.querySelector('#seriesCanonSave').click()")
+        dev.until("!SeriesPage.state.series.canonDraft && SeriesPage.state.series.canon.version === 2")
         assert dev.evaluate("document.querySelector('#seriesVersionBadge').textContent").endswith('v2')
         assert dev.evaluate("document.querySelector('#seriesCanonWarning').hidden === true")
 
@@ -268,6 +272,7 @@ def main():
         dev.until("document.querySelector('.series-ref-slot select').value !== ''", timeout=15)
         inherited = dev.evaluate("document.querySelector('.series-ref-slot select').value")
         assert inherited, 'a new frame should inherit the series default anchor'
+        dev.evaluate("const subject=document.querySelector('[data-shot-field=subject]');subject.value='邮差走过雨后的码头';subject.dispatchEvent(new Event('input'));subject.dispatchEvent(new Event('change'))")
         dev.evaluate("document.querySelector('#seriesInspectorClose').click()")
 
         # ---------------------------------------------------------------- single frame generation
@@ -292,8 +297,11 @@ def main():
         dev.until("document.querySelector('.series-preview-meta').textContent.includes('参考图 1 张')")
 
         before = json.load(urllib.request.urlopen(endpoints['stats']))['generations']
-        # Pick a non-default size on the create page: series generation must follow it.
+        # Composer edits affect the series only after its explicit update action.
         dev.evaluate("document.querySelector('#size').value = '1536x1024'; document.querySelector('#size').dispatchEvent(new Event('change'))")
+        assert dev.evaluate("SeriesPage.state.series.generationParameters.size") != '1536x1024'
+        dev.evaluate("document.querySelector('#seriesParametersCopy').click()")
+        dev.until("SeriesPage.state.series.generationParameters.size === '1536x1024' && !SeriesPage.state.parameterSaving.size")
         assert dev.evaluate("document.querySelector('[data-action=generate-shot]') !== null")
         dev.evaluate("document.querySelector('[data-action=generate-shot]').click()")
         dev.until("document.querySelector('#seriesStatus').textContent.includes('生成完成') || document.querySelector('#seriesStatus').dataset.type === 'error'", timeout=60)
@@ -306,7 +314,7 @@ def main():
         edit_calls = json.load(urllib.request.urlopen(endpoints['stats']))['editCalls']
         assert edit_calls and edit_calls[-1]['images'] == 1, edit_calls
         assert '参考图使用说明' in edit_calls[-1]['prompt'], edit_calls[-1]['prompt'][:200]
-        # The create page size was honoured: it appears as a form field on the edit request.
+        # The explicitly adopted size appears on the edit request.
         assert edit_calls[-1].get('size') == '1536x1024', edit_calls[-1]
         # The result image opens a lightbox, like the create page does.
         assert dev.evaluate("document.querySelector('.series-result img.is-zoomable') !== null")
@@ -412,6 +420,8 @@ def main():
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             if json.load(urllib.request.urlopen(endpoints['stats']))['generations'] >= generations_before_matrix + pending:
+                break
+            if dev.evaluate('!SeriesPage.state.batch && !SeriesPage.state.batchStarting'):
                 break
             time.sleep(.2)
         assert json.load(urllib.request.urlopen(endpoints['stats']))['generations'] >= generations_before_matrix + pending

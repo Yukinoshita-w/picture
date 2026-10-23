@@ -29,12 +29,12 @@ FAULTS = r"""
       }
       const request = original.apply(this, args);
       if (generation && ((this.name === 'assets' && method === 'add') ||
-        (this.name === 'shots' && method === 'put') || (this.name === 'assets' && method === 'delete'))) {
-        const stage = method === 'add' ? 'asset' : method === 'put' ? 'shot' : 'cleanup';
+        (this.name === 'shots' && method === 'put') || (this.name === 'runs' && method === 'put') || (this.name === 'assets' && method === 'delete'))) {
+        const stage = method === 'add' ? 'asset' : this.name === 'runs' ? 'run' : method === 'put' ? 'shot' : 'cleanup';
         request.addEventListener('success', () => {
           window.storageObservations.push({stage, result:window.SeriesPage?.state.shots[0]?.result?.assetId || null,
             assets:window.SeriesPage?.state.assets.map(a => a.id)});
-          if (window.storageFault === stage) {
+          if (window.storageFault === stage || (window.storageFault === 'history' && stage === 'shot' && args[0]?.generationHistory?.length > 1)) {
             window.storageFault = '';
             window.storageInjected = true;
             tx.abort();
@@ -93,9 +93,9 @@ def main():
         assert old_assets[0]['id'] == old_id and old_assets[0]['data'].startswith('data:image/')
         assert all(item['result'] is None for item in dev.evaluate('storageObservations'))
 
-        # Abort after successful image/frame writes and even after old-image deletion.
+        # Abort after image/frame/history writes; all versions must roll back together.
         # Each must roll back every generated record while the old result stays visible.
-        for fault in ('asset', 'shot', 'cleanup', 'quota', 'unavailable'):
+        for fault in ('asset', 'shot', 'history', 'quota', 'unavailable'):
             generate(fault)
             if fault != 'unavailable':
                 assert dev.evaluate('storageInjected'), fault
@@ -137,7 +137,7 @@ def main():
         assert dev.evaluate("document.querySelector('#seriesStatus').textContent") == 'B 提示'
         assert dev.evaluate("testStore.listAssets('a')") == old_assets
 
-        # Successful retry replaces the image atomically; edits persist, no leftovers.
+        # Successful retry appends history atomically; edits and older images persist.
         open_series(dev, 'a')
         dev.evaluate("document.querySelector('[data-shot-id=shot_a]').click()")
         generate(hold=True)
@@ -151,9 +151,10 @@ def main():
         assets = dev.evaluate("testStore.listAssets('a')")
         assert saved['status'] == 'done' and saved['title'] == '保存期间修改标题'
         assert saved['result']['assetId'] != old_id
-        assert len(assets) == 1 and assets[0]['id'] == saved['result']['assetId']
+        assert len(assets) == 2 and {asset['id'] for asset in assets} == {old_id, saved['result']['assetId']}
+        assert saved['generationHistory'] == [old_result, saved['result']]
         assert dev.evaluate('SeriesPage.state.shots[0].result') == saved['result']
-        assert dev.evaluate('SeriesPage.state.assets') == assets
+        assert sorted(dev.evaluate('SeriesPage.state.assets'), key=lambda asset: asset['id']) == assets
         assert all(item['result'] == old_id for item in dev.evaluate('storageObservations'))
 
         # Data survives reload, and the local image can be decoded without network.
@@ -189,7 +190,7 @@ def main():
         assert dev.evaluate("testStore.saveGeneration({seriesId:'a',shotId:'shot_a',asset:newAsset,result:newResult})") is None
         assert dev.evaluate("testStore.listShots('a')") == []
         assert dev.evaluate("testStore.listAssets('a')") == []
-        print('PASS: atomic image/frame/replacement commit, rollback after each write, quota and persistent failure, '
+        print('PASS: atomic image/frame/history commit, rollback after each write, quota and persistent failure, '
               'no phantom result/orphan, B isolation, successful retry, edits, refresh, offline image, deleted targets, ID collision')
 
 

@@ -81,8 +81,9 @@ def main():
         saved = read()
         assert saved['status'] == 'done' and saved['pendingGeneration'] is None
         assert saved['result']['parameters'] == pending['result']['parameters']
-        assert len(assets()) == 1 and assets()[0]['data'].startswith('data:image/png;base64,')
-        assert saved['result']['assetId'] == assets()[0]['id'] != original['assetId']
+        assert len(assets()) == 2 and all(asset['data'].startswith('data:image/png;base64,') for asset in assets())
+        assert saved['result']['assetId'] in {asset['id'] for asset in assets()} and saved['result']['assetId'] != original['assetId']
+        assert saved['generationHistory'] == [original, saved['result']]
         assert stats()['downloadAuth'] is None
 
         # Expired links leave durable pending metadata and the previous image.
@@ -113,7 +114,7 @@ def main():
             assert stats()['generations'] == counts['generations']
 
         # Rollback of final commit preserves the pending record and old result.
-        for fault in ('quota', 'cleanup'):
+        for fault in ('quota', 'history'):
             dev.evaluate('window.storageFault=' + json.dumps(fault) + ';window.storageInjected=false')
             retry()
             assert dev.evaluate('storageInjected')
@@ -131,7 +132,7 @@ def main():
         retry()
         assert dev.evaluate("testStore.getShot(importedShotId).then(s=>s.pendingGeneration===null && s.status==='done')")
         copy_assets = assets('copy')
-        assert len(copy_assets) == 1 and copy_assets[0]['data'].startswith('data:image/')
+        assert len(copy_assets) == len(original_assets) + 1 and all(asset['data'].startswith('data:image/') for asset in copy_assets)
         assert read()['result'] == original and read()['pendingGeneration']['id'] == pending['id']
         assert assets() == original_assets and stats()['generations'] == counts['generations']
         dev.evaluate("testStore.deleteSeries('copy').then(()=>SeriesPage.activate())")
@@ -185,7 +186,8 @@ def main():
         count = stats()['generations']
         dev.evaluate("document.querySelector('[data-action=localize-generation]').click()")
         idle()
-        assert assets()[0]['data'].startswith('data:image/') and stats()['generations'] == count
+        assert dev.evaluate("testStore.getShot('shot_a').then(s=>testStore.getAsset(s.result.assetId)).then(a=>a.data.startsWith('data:image/'))")
+        assert stats()['generations'] == count
         assert read()['canonVersion'] == legacy_version
 
         # A first remote failure has no adopted result or orphan; discard costs no API call.
@@ -199,11 +201,14 @@ def main():
         dev.evaluate("document.querySelector('#seriesConfirmOk').click()")
         dev.until("SeriesPage.state.shots[0].pendingGeneration && !SeriesPage.state.batch && !SeriesPage.state.busy")
         assert read('c')['status'] == 'pending-save' and not read('c').get('result') and assets('c') == []
-        assert '1 帧图片待保存' in dev.evaluate("document.querySelector('#seriesStatus').textContent")
+        dev.until("document.querySelector('#seriesStatus').textContent.includes('1 帧图片待保存')")
         assert dev.evaluate("document.querySelector('#seriesStatus').dataset.type") == 'info'
         count = stats()['generations']
         dev.evaluate("document.querySelector('#seriesBatchSelected').click()")
-        assert not dev.evaluate("document.querySelector('#seriesConfirmDialog').open")
+        dev.until("document.querySelector('#seriesConfirmDialog').open")
+        assert '检查通过 0 帧，跳过 1 帧' in dev.evaluate("document.querySelector('#seriesConfirmText').textContent")
+        dev.evaluate("document.querySelector('#seriesConfirmOk').click()")
+        dev.until('!SeriesPage.state.batch && !SeriesPage.state.batchStarting')
         assert stats()['generations'] == count
         dev.evaluate("document.querySelector('[data-action=discard-pending-generation]').click()")
         dev.until("document.querySelector('#seriesConfirmDialog').open")

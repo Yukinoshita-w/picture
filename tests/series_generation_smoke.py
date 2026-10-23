@@ -235,7 +235,9 @@ def main():
         idle()
         assert read_shot()['title'] == '返回 A 后的编辑'
         assert read_shot()['canonVersion'] == 4
-        assert read_shot()['result']['parameters']['model'] == 'later-model'
+        # Composer changes no longer rewrite this series' adopted parameters.
+        assert read_shot()['result']['parameters']['model'] == 'gpt-image-1'
+        assert read_shot()['result']['parameters']['size'] == '1024x1024'
         assert dev.evaluate("document.querySelector('.series-result img') !== null")
         assert not dev.evaluate("document.querySelector('[data-action=delete-shot]').disabled")
         assert stats()['generations'] == before + 1
@@ -296,7 +298,7 @@ def main():
         idle()
         assert stats()['generations'] == before + 1
         assert read_shot()['result']['references'] == []
-        assert stats()['lastBody']['model'] == 'later-model'
+        assert stats()['lastBody']['model'] == 'gpt-image-1'
         assert read_shot()['result']['parameters']['model'] == stats()['lastBody']['model']
 
         # Refresh reads the saved result and safe request metadata without migration.

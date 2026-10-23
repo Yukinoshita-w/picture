@@ -1,7 +1,6 @@
 const http = require('node:http');
 const zlib = require('node:zlib');
 const { createServer } = require('../server');
-const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=';
 let nextGenerationControl = {};
 let releaseGeneration = null;
 let nextDownloadControl = {};
@@ -280,7 +279,7 @@ const mock = http.createServer(async (req, res) => {
     responded = true;
     if (control.fail) { res.statusCode = 403; return res.end('expired mock image link'); }
     res.setHeader('Content-Type', control.unsupported ? 'text/html' : 'image/png');
-    return res.end(control.corrupt || control.unsupported ? 'not an image' : Buffer.from(image, 'base64'));
+    return res.end(control.corrupt || control.unsupported ? 'not an image' : solidPng(60,92,120));
   }
   if (req.url.endsWith('/models')) { responded = true; return res.end(JSON.stringify({ data: [{ id: 'gpt-image-1' }] })); }
   // The series feature reuses the create page's base URL, so this mock must answer chat
@@ -336,7 +335,7 @@ const mock = http.createServer(async (req, res) => {
   if (!await controlledGeneration(res)) { responded = true; return; }
   if (res.destroyed) return;
   responded = true;
-  res.end(JSON.stringify({ data: [{ ...(res.mockRemote ? {url:'http://127.0.0.1:' + mock.address().port + '/remote-image'} : {b64_json:image}), revised_prompt: 'A sample from the local mock API' }] }));
+  res.end(JSON.stringify({ data: [{ ...(res.mockRemote ? {url:'http://127.0.0.1:' + mock.address().port + '/remote-image'} : {b64_json:solidPng(60,92,120).toString('base64')}), revised_prompt: 'A sample from the local mock API' }] }));
 });
 mock.listen(0, '127.0.0.1', () => {
   optimizerMock.listen(0, '127.0.0.1', () => {
