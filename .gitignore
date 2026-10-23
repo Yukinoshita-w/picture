@@ -3,11 +3,7 @@ node_modules/
 .env.*
 *.log
 test-results/
-tests/*
-!tests/phase-five.test.js
-!tests/phase-five-fixture.js
-!tests/phase_five_smoke.py
-!tests/phase_five_driver.py
+tests/
 PLAN.md
 docs/
 checks/
