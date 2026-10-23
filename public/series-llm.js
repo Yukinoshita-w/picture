@@ -18,6 +18,73 @@
 
   const HEADING = /^(?:#{1,6}\s+|第[一二三四五六七八九十百零〇\d]+[章节回卷幕部]|【[^】]{1,40}】)/;
 
+  function splitSourceFragments(input, { target = CHUNK_TARGET, maxFragments = 200 } = {}) {
+    const source = String(input || '');
+    if (!source.trim()) return { fragments: [], total: 0, truncated: false, source };
+    const lineHeadings = [];
+    let lineStart = 0;
+    while (lineStart < source.length) {
+      let lineEnd = source.indexOf('\n', lineStart);
+      if (lineEnd < 0) lineEnd = source.length;
+      const rawLine = source.slice(lineStart, lineEnd).replace(/\r$/, '');
+      const heading = headingOf(rawLine);
+      if (heading) lineHeadings.push({ start: lineStart, heading });
+      lineStart = lineEnd + 1;
+    }
+
+    const sections = [];
+    if (!lineHeadings.length) sections.push({ start: 0, end: source.length, headingPath: [] });
+    else {
+      if (source.slice(0, lineHeadings[0].start).trim()) sections.push({ start: 0, end: lineHeadings[0].start, headingPath: [] });
+      lineHeadings.forEach((entry, index) => sections.push({
+        start: entry.start,
+        end: lineHeadings[index + 1]?.start ?? source.length,
+        headingPath: [entry.heading]
+      }));
+    }
+
+    const fragments = [];
+    const addSection = section => {
+      const length = section.end - section.start;
+      if (length <= target) {
+        if (source.slice(section.start, section.end).trim()) fragments.push({ ...section });
+        return;
+      }
+      let offset = section.start;
+      while (offset < section.end) {
+        let end = Math.min(section.end, offset + target);
+        if (end < section.end) {
+          const floor = offset + Math.floor(target * 0.65);
+          const breaks = [source.lastIndexOf('\n\n', end), source.lastIndexOf('。', end), source.lastIndexOf('！', end), source.lastIndexOf('？', end), source.lastIndexOf('. ', end)];
+          const boundary = Math.max(...breaks.filter(index => index >= floor));
+          if (boundary >= floor) end = boundary + (source[boundary] === '\n' ? 2 : 1);
+        }
+        while (end > offset && /\s/.test(source[end - 1])) end--;
+        if (end <= offset) end = Math.min(section.end, offset + target);
+        if (source.slice(offset, end).trim()) fragments.push({ start: offset, end, headingPath: section.headingPath.slice() });
+        offset = end;
+        while (offset < section.end && /\s/.test(source[offset])) offset++;
+      }
+    };
+    for (const section of sections) addSection(section);
+
+    const truncated = fragments.length > maxFragments;
+    const kept = truncated ? fragments.slice(0, maxFragments) : fragments;
+    return {
+      fragments: kept.map((fragment, index) => ({
+        ...fragment,
+        index,
+        id: 'F' + String(index + 1).padStart(3, '0'),
+        text: source.slice(fragment.start, fragment.end),
+        chars: fragment.end - fragment.start,
+        total: kept.length
+      })),
+      total: kept.length,
+      truncated,
+      source
+    };
+  }
+
   function normalizeText(input) {
     return String(input || '')
       .replace(/\r\n?/g, '\n')
@@ -103,9 +170,9 @@
   // ---------------------------------------------------------------- hashing
 
   // Cached extractions must be invalidated by any input that would change the result.
-  function cacheKey({ input, model, promptVersion, gallerySignature = '' }) {
+  function cacheKey({ input, model, promptVersion, gallerySignature = '', serviceSignature = '' }) {
     let hash = 0x811c9dc5;
-    const text = [String(input || ''), String(model || ''), String(promptVersion || ''), String(gallerySignature || '')].join('\u0000');
+    const text = [String(input || ''), String(model || ''), String(promptVersion || ''), String(gallerySignature || ''), String(serviceSignature || '')].join('\u0000');
     for (let index = 0; index < text.length; index++) {
       hash ^= text.charCodeAt(index);
       hash = Math.imul(hash, 0x01000193) >>> 0;
@@ -207,7 +274,7 @@
     return { ok: filled > 0, data, errors: filled > 0 ? [] : ['风格草案为空，请检查文本模型输出。'] };
   }
 
-  function validateOutline(raw, count) {
+  function validateOutline(raw, count, allowedSourceRefs = []) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, data: null, errors: ['帧清单不是 JSON 对象。'] };
     const shots = (Array.isArray(raw.shots) ? raw.shots : [])
       .map((item, index) => ({
@@ -219,6 +286,7 @@
         scene: text(item?.scene, 80),
         detail: text(item?.detail, 200),
         loreTitle: text(item?.loreTitle, 60),
+        sourceRef: text(item?.sourceRef, 48),
         axisValues: Object.fromEntries(Object.entries(item?.axisValues && typeof item.axisValues === 'object' ? item.axisValues : {}).slice(0, 8).map(([key, value]) => [text(key, 40), text(value, 60)]))
       }))
       .filter(item => item.subject || item.action || item.scene)
@@ -229,6 +297,31 @@
       .slice(0, 6);
     const data = { title: text(raw.title, 40), beats: stringList(raw.beats, 4, 80), axes, shots };
     const errors = shots.length ? [] : ['帧清单为空。'];
+    if (allowedSourceRefs.length) {
+      const allowed = new Set(allowedSourceRefs);
+      let previous = -1;
+      for (const [index, shot] of shots.entries()) {
+        if (!allowed.has(shot.sourceRef)) errors.push('第 ' + (index + 1) + ' 帧缺少有效的原文来源标识。');
+        const position = allowedSourceRefs.indexOf(shot.sourceRef);
+        if (position >= 0 && position < previous) errors.push('第 ' + (index + 1) + ' 帧的来源顺序倒置，请按原文顺序拆帧。');
+        previous = Math.max(previous, position);
+      }
+    }
+    return { ok: errors.length === 0, data, errors };
+  }
+
+  function validateLoreSummary(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, data: null, errors: ['章节摘要不是 JSON 对象。'] };
+    const events = (Array.isArray(raw.events) ? raw.events : []).map(item => ({
+      beat: text(item?.beat, 180),
+      sourceQuote: String(item?.sourceQuote || '').trim(),
+      importance: Math.max(1, Math.min(5, Number(item?.importance) || 1))
+    })).filter(item => item.beat && item.sourceQuote).slice(0, 16);
+    const data = { chapterTitle: text(raw.chapterTitle, 80), summary: text(raw.summary, 900), events };
+    const errors = [];
+    if (!data.summary) errors.push('章节摘要为空。');
+    if (!events.length) errors.push('没有可定位到原文的关键事件。');
+    if (events.some(item => item.sourceQuote.length > 240)) errors.push('关键事件引用超过 240 字符，请选择完整且更短的原句。');
     return { ok: errors.length === 0, data, errors };
   }
 
@@ -279,6 +372,7 @@
     }
 
     async function call(route, body, signal) {
+      if (cancelled || signal?.aborted) throw Object.assign(new Error('已取消'), { name: 'AbortError' });
       const controller = new AbortController();
       const abort = () => controller.abort();
       signal?.addEventListener('abort', abort, { once: true });
@@ -443,16 +537,87 @@
       return { ...result, cached: false, key };
     }
 
+    async function textServiceSignature(config) {
+      const raw = [config?.apiUrl, config?.model, config?.apiKey].map(value => String(value || '')).join('\u0000');
+      if (root.crypto?.subtle && root.TextEncoder) {
+        const digest = await root.crypto.subtle.digest('SHA-256', new root.TextEncoder().encode(raw));
+        return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      }
+      return cacheKey({ input: raw, promptVersion: 'service-config' });
+    }
+
+    async function summarizeLore({ chunks, config, seriesId, promptVersion = 'lore-summary-v1', signal }) {
+      const serviceSignature = await textServiceSignature(config);
+      let done = 0;
+      let reused = 0;
+      onProgress({ phase: 'summarize', done, total: chunks.length, reused });
+      const outcomes = await pool(chunks, concurrency, async chunk => {
+        if (cancelled) throw Object.assign(new Error('已取消'), { name: 'AbortError' });
+        const input = String(chunk.text || '');
+        const key = cacheKey({
+          input: [input, JSON.stringify(chunk.headingPath || [])].join('\u0000'),
+          model: config?.model,
+          promptVersion,
+          serviceSignature
+        });
+        const cached = store && seriesId ? await store.getExtraction(key).catch(() => null) : null;
+        if (cached?.outcome?.ok) {
+          done++;
+          reused++;
+          onProgress({ phase: 'summarize', done, total: chunks.length, reused });
+          return { chunk, outcome: cached.outcome, key, fromCache: true };
+        }
+        const validate = raw => {
+          const checked = validateLoreSummary(raw);
+          if (!checked.ok) return checked;
+          const positions = checked.data.events.map(event => input.indexOf(event.sourceQuote));
+          if (positions.some(position => position < 0)) return { ok: false, data: checked.data, errors: ['关键事件引用必须是本段原文中的连续原句。'] };
+          checked.data.events.sort((a, b) => input.indexOf(a.sourceQuote) - input.indexOf(b.sourceQuote));
+          return checked;
+        };
+        let outcome;
+        try {
+          outcome = await callJson('/api/series/summarize', {
+            ...config,
+            input,
+            chunkIndex: chunk.index,
+            chunkTotal: chunk.total,
+            headingPath: chunk.headingPath || []
+          }, validate, signal);
+        } catch (error) {
+          if (error?.name === 'AbortError' || cancelled) throw error;
+          outcome = { ok: false, data: null, errors: [error?.message || '摘要请求失败。'] };
+        }
+        if (outcome.ok && store && seriesId) {
+          await store.putExtraction({
+            id: key,
+            seriesId,
+            model: config?.model,
+            serviceSignature,
+            promptVersion,
+            chunkIndex: chunk.index,
+            headingPath: chunk.headingPath || [],
+            outcome,
+            createdAt: Date.now()
+          }).catch(() => {});
+        }
+        done++;
+        onProgress({ phase: 'summarize', done, total: chunks.length, reused });
+        return { chunk, outcome, key, fromCache: false };
+      }, signal);
+      return { outcomes, reused, serviceSignature };
+    }
+
     async function describe({ image, role, context, config, signal }) {
       const outcome = await callJson('/api/series/describe', { ...config, image, role, context }, validateDescription, signal);
       return outcome;
     }
 
-    async function outline({ input, config, count, axes, hasLore = false, loreTitles = [], signal }) {
+    async function outline({ input, config, count, axes, hasLore = false, loreTitles = [], sourceRefs = [], signal }) {
       const outcome = await callJson(
         '/api/series/outline',
-        { ...config, input, count, axes, hasLore, loreTitles },
-        raw => validateOutline(raw, count),
+        { ...config, input, count, axes, hasLore, loreTitles, sourceRefs },
+        raw => validateOutline(raw, count, sourceRefs.map(item => item.id)),
         signal
       );
       return outcome;
@@ -463,7 +628,7 @@
       return outcome;
     }
 
-    return { extract, describe, outline, shot, cancel, splitChunks, cacheKey, get cancelled() { return cancelled; } };
+    return { extract, summarizeLore, describe, outline, shot, cancel, splitChunks, cacheKey, get cancelled() { return cancelled; } };
   }
 
   // ---------------------------------------------------------------- merge
@@ -515,12 +680,14 @@
     DEFAULT_CONCURRENCY,
     normalizeText,
     splitChunks,
+    splitSourceFragments,
     cacheKey,
     mergeExtractions,
     repairMessages,
     validateExtraction,
     validateCanonDraft,
     validateOutline,
+    validateLoreSummary,
     validateShotFields,
     validateDescription,
     createSeriesLlm

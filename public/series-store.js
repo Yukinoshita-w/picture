@@ -156,7 +156,7 @@
     function updateShot(id, seriesId, edit) { return patchExisting('shots', id, seriesId, edit); }
     function updateAsset(id, seriesId, edit) { return patchExisting('assets', id, seriesId, edit); }
 
-    function appendShots(seriesId, shots, axes = [], accept = () => true, { deduplicateMatrix = false } = {}) {
+    function appendShots(seriesId, shots, axes = [], accept = () => true, { deduplicateMatrix = false, sourceSnapshot = null } = {}) {
       return guarded(() => withTransaction(['series', 'shots', 'lore', 'assets'], 'readwrite', (tx, output) => {
         output.value = [];
         const owner = tx.objectStore('series').get(seriesId);
@@ -164,13 +164,19 @@
           if (!owner.result || !accept()) return;
           const records = tx.objectStore('shots');
           const existing = records.index('seriesId').getAll(IDBKeyRange.only(seriesId));
-          const lore = tx.objectStore('lore').index('seriesId').getAllKeys(IDBKeyRange.only(seriesId));
+          const lore = tx.objectStore('lore').index('seriesId').getAll(IDBKeyRange.only(seriesId));
           const assets = tx.objectStore('assets').index('seriesId').getAllKeys(IDBKeyRange.only(seriesId));
           assets.onsuccess = () => {
             if (!accept()) return;
             try {
               const order = existing.result.reduce((max, item) => Math.max(max, item.order ?? item.index ?? 0), -1) + 1;
-              const loreIds = new Set(lore.result);
+              const loreIds = new Set(lore.result.map(item => item.id));
+              if (sourceSnapshot) {
+                for (const expected of sourceSnapshot) {
+                  const current = lore.result.find(item => item.id === expected.id);
+                  if (!current || current.text !== expected.text) throw new Error('原文已修改或删除，请重新拆帧并核对来源。');
+                }
+              }
               const assetIds = new Set(assets.result);
               const keys = new Set(deduplicateMatrix ? existing.result.map(shot => Engine.matrixKey(shot.axisValues)) : []);
               const candidates = deduplicateMatrix ? shots.filter(shot => {
@@ -180,7 +186,7 @@
                 return true;
               }) : shots;
               output.value = candidates.map((shot, index) => ({ ...shot, seriesId, order: order + index, index: order + index,
-                ...(deduplicateMatrix ? { code: 'S' + String(order + index + 1).padStart(2, '0') } : {}),
+                ...(deduplicateMatrix || sourceSnapshot ? { code: 'S' + String(order + index + 1).padStart(2, '0') } : {}),
                 loreRefs: (shot.loreRefs || []).filter(id => loreIds.has(id)),
                 references: (shot.references || []).filter(ref => assetIds.has(ref.assetId)) }));
               for (const shot of output.value) deduplicateMatrix ? records.add(shot) : records.put(shot);

@@ -228,7 +228,10 @@
   .series-shot-selectbar { flex-wrap: wrap; gap: var(--s-2); }
   .series-batch-selected { margin-left: 0; width: 100%; }
   .series-split-body { padding: var(--s-4); gap: var(--s-4); }
-  .series-split-footer { padding: var(--s-3) var(--s-4); }
+  .series-split-footer { padding: var(--s-3) var(--s-4); flex-wrap: wrap; }
+  .series-split-section-head { flex-wrap: wrap; }
+  .series-split-fragments { padding-left: 8px; }
+  .series-split-fragment-preview { padding-left: 0; }
   .series-split-count { flex-wrap: wrap; }
   .series-guide-step { grid-template-columns: 36px minmax(0, 1fr); padding: var(--s-3); }
   .series-guide-index { font-size: 20px; }

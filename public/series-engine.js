@@ -402,13 +402,42 @@
     if (dropped.length) warnings.push('参考图超过 ' + MAX_REFERENCES + ' 张，已按优先级保留前 ' + MAX_REFERENCES + ' 张。');
 
     let shotSection = renderShotSection(context.effectiveShot, canon || {});
+    const loreExcerpts = [];
+    const missingLoreRefs = [];
     const loreText = list(shot?.loreRefs, 3)
-      .map(id => (Array.isArray(lore) ? lore.find(item => item?.id === id) : null))
-      .filter(Boolean)
-      .map(item => clamp(item.text, 400))
+      .map(id => {
+        const item = Array.isArray(lore) ? lore.find(entry => entry?.id === id) : null;
+        if (!item) {
+          missingLoreRefs.push('档案条目已不存在');
+          return '';
+        }
+        const selection = (Array.isArray(shot?.loreSelections) ? shot.loreSelections : []).find(entry => entry?.loreId === id);
+        if (selection?.pending) {
+          missingLoreRefs.push(item.title || '未命名条目');
+          return '';
+        }
+        if (selection) {
+          const start = Number(selection.start);
+          const end = Number(selection.end);
+          const excerpt = String(selection.text || '');
+          if (!excerpt || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start
+            || String(item.text || '').slice(start, end) !== excerpt) {
+            missingLoreRefs.push((item.title || '未命名条目') + '（引用范围已失效）');
+            return '';
+          }
+          loreExcerpts.push({ loreId: id, title: item.title || '未命名条目', text: excerpt, start, end });
+          return excerpt;
+        }
+        missingLoreRefs.push((item.title || '未命名条目') + '（旧引用需要确认摘录）');
+        return '';
+      })
       .filter(Boolean)
       .join('；');
     const loreSection = loreText ? '设定摘录：' + loreText + '。' : '';
+    if (loreExcerpts.some(item => item.text.length > BUDGET.lore)) {
+      warnings.push('原文摘录超过建议的 ' + BUDGET.lore + ' 字符；实际发送内容未截断，请选择更短的相关片段。');
+    }
+    for (const title of missingLoreRefs) warnings.push('「' + title + '」尚未选定有效原文片段，无法生成。');
     const negative = renderNegative(canon, shot);
     const guidanceText = formatReferenceGuidance(references.map(ref => ref.purpose === 'custom' ? { ...ref, purpose: '' } : ref));
     const requirementText = typeof requirements === 'function' ? String(requirements({ size, quality, n }) || '') : '';
@@ -429,7 +458,7 @@
     let requestPrompt = build(shotSection);
     let prompt = finalize(requestPrompt);
     let total = prompt.length;
-    if (total > limit && shotSection) {
+    if (total > limit && shotSection && !loreExcerpts.length) {
       const over = total - limit;
       const trimmed = trimShotSection(shotSection, over);
       if (trimmed !== shotSection) {
@@ -473,7 +502,8 @@
       characters: total,
       overLimit: total > limit,
       conflicts,
-      blocked: conflicts.length > 0,
+      blocked: conflicts.length > 0 || missingLoreRefs.length > 0,
+      loreExcerpts,
       anchorHash: hashString(anchor),
       anchor
     };
@@ -719,6 +749,9 @@
         ? shot.references.map(entry => (entry ? { ...entry, assetId: remap(entry.assetId) } : entry))
         : [],
       loreRefs: Array.isArray(shot.loreRefs) ? shot.loreRefs.map(remap) : [],
+      loreSelections: Array.isArray(shot.loreSelections)
+        ? shot.loreSelections.map(selection => ({ ...selection, loreId: remap(selection.loreId) }))
+        : [],
       generationHistory: resultHistory(shot).map(result => ({ ...result, assetId: remap(result.assetId),
         ...(result.runId ? { runId: remap(result.runId) } : {}),
         ...(result.parameters ? { parameters: { ...generationParameters(result.parameters), n: 1 } } : {}),

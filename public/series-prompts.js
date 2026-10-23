@@ -2,7 +2,7 @@
   'use strict';
 
   // Bump when the wording changes in a way that should invalidate cached extractions.
-  const SERIES_PROMPT_VERSION = 2;
+  const SERIES_PROMPT_VERSION = 3;
 
   const COMMON_RULES = `你是图像系列创作工具的结构化分析器。你的输出会被程序直接解析成 JSON，不经过人工阅读。
 
@@ -98,19 +98,24 @@ ${hasGallery ? '另外，用户已上传参考图，并提供了这些图片的�
 }`;
   }
 
-  function outlineInstructions({ count, axes, hasLore, loreTitles }) {
+  function outlineInstructions({ count, axes, hasLore, loreTitles, sourceRefs = [] }) {
     const axisText = axes && axes.length
       ? '用户已定义的可变轴：' + axes.map(axis => axis.label + '（' + axis.id + '）：' + axis.values.join('、')).join('；') + '。'
       : '用户还没有定义可变轴。请根据素材建议 2 个轴。';
     const loreText = hasLore
       ? `素材来源：用户提供的「档案」条目。这些条目是这段故事或设定的原文，帧必须从其中取材，不要引入原文没有的人物、地点、道具或情节。\n条目列表：${(loreTitles || []).join('、') || '（未命名条目）'}。\n如果某一帧主要取材于某条档案，请在 loreTitle 字段填该条目的标题。`
       : '素材来源：用户没有提供档案条目，只能依据主题与风格圣经来设计；不要虚构具体的人名、地名或情节细节，用通用描述代替。';
+    const sourceText = sourceRefs.length
+      ? `用户提供了按原文顺序排列的章节摘要与事件。请先保留事件顺序，再按重要性与情节节奏将 ${count} 帧分配给这些事件。每帧的 sourceRef 必须逐字采用对应事件方括号中的 ID；不得编造或留空。可重复使用同一个事件 ID。\n可用来源：${sourceRefs.map(item => '[' + item.id + '] ' + item.loreTitle + ' / ' + item.chapterTitle).join('\n')}`
+      : '';
     return `${COMMON_RULES}
 
 任务：把用户提供的「档案」原文拆成 ${count} 帧，输出一份帧清单。这是"把一段文字切分成若干画面"，不是自由创作新故事。
 只输出文字的帧描述，不涉及生成图片，也不要写任何图片参数、尺寸或模型指令。
 
 ${loreText}
+
+${sourceText}
 
 ${axisText}
 
@@ -138,8 +143,25 @@ ${axisText}
     "scene": "场景",
     "detail": "这一帧的独特视觉细节，一句话",
     "loreTitle": "取材的档案条目标题，没有就留空",
+    "sourceRef": "来源事件 ID；如有提供来源列表必须填写其中一项",
     "axisValues": {"轴id": "取值"}
   }]
+}`;
+  }
+
+  function summarizeInstructions({ chunkIndex, chunkTotal, headingPath = [] }) {
+    const position = headingPath.length ? '原文位置：' + headingPath.join(' / ') : '原文没有明确章节标题。';
+    return `${COMMON_RULES}
+
+任务：为后续按原文顺序分配分镜帧数，概括这一段的章节内容与情节事件。这一调用只处理当前片段（第 ${chunkIndex + 1} 段，共 ${chunkTotal} 段），不得补写其他片段的信息。
+${position}
+按原文先后列出关键事件；每项必须附一段从输入原文逐字复制、连续且不超过 240 字的 sourceQuote，供用户回查和选作生图引用。不要改写引文，不要省略引文中的约束。重要度使用 1 到 5 的整数。
+
+输出结构：
+{
+  "chapterTitle": "章节标题，没有就留空",
+  "summary": "保留人物、地点、因果和状态变化的简明章节摘要",
+  "events": [{"beat": "按原文顺序概括一个关键事件", "sourceQuote": "原文中的连续原句", "importance": 1}]
 }`;
   }
 
@@ -195,6 +217,7 @@ ${axisText}
       case 'reduce': return reduceInstructions(options);
       case 'describe': return describeInstructions(options);
       case 'outline': return outlineInstructions(options);
+      case 'summarize': return summarizeInstructions(options);
       case 'shot': return shotInstructions(options);
       case 'repair': return repairInstructions();
       default: throw new Error('不支持的系列提示任务：' + task);
@@ -210,6 +233,7 @@ ${axisText}
     reduceInstructions,
     describeInstructions,
     outlineInstructions,
+    summarizeInstructions,
     shotInstructions,
     repairInstructions
   };

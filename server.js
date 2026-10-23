@@ -19,6 +19,7 @@ const MAX_REFERENCE_TOTAL = 20 * 1024 * 1024;
 const BODY_LIMITS = {
   '/api/generate': 30 * 1024 * 1024,
   '/api/series/extract': 256 * 1024,
+  '/api/series/summarize': 256 * 1024,
   '/api/series/reduce': 512 * 1024,
   '/api/series/describe': 16 * 1024 * 1024,
   '/api/series/outline': 512 * 1024,
@@ -386,6 +387,19 @@ async function seriesReduce(body, signal) {
   return { ...result, data: extractJsonObject(result.text) };
 }
 
+async function seriesSummarize(body, signal) {
+  const chunkIndex = Number(body.chunkIndex ?? 0);
+  const chunkTotal = Number(body.chunkTotal ?? 1);
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) throw new ApiError('分段序号无效');
+  if (!Number.isInteger(chunkTotal) || chunkTotal < 1 || chunkTotal > 200) throw new ApiError('分段总数无效');
+  const headingPath = Array.isArray(body.headingPath) ? body.headingPath.map(item => String(item).slice(0, 120)).slice(0, 6) : [];
+  const result = await seriesChat(body, signal, value => ([
+    { role: 'system', content: buildSeriesInstructions('summarize', { chunkIndex, chunkTotal, headingPath }) },
+    { role: 'user', content: String(value.input) }
+  ]), { maxInput: 12000 });
+  return { ...result, data: extractJsonObject(result.text) };
+}
+
 async function seriesDescribe(body, signal) {
   const { endpoint, apiKey, model } = getConfig(body, chatEndpoint);
   const image = String(body.image || '');
@@ -424,8 +438,13 @@ async function seriesOutline(body, signal) {
   const loreTitles = Array.isArray(body.loreTitles)
     ? body.loreTitles.slice(0, 40).map(item => String(item).slice(0, 60))
     : [];
+  const sourceRefs = Array.isArray(body.sourceRefs) ? body.sourceRefs.slice(0, 200).map(item => ({
+    id: String(item?.id || '').slice(0, 48),
+    loreTitle: String(item?.loreTitle || '').slice(0, 60),
+    chapterTitle: String(item?.chapterTitle || '').slice(0, 80)
+  })).filter(item => item.id) : [];
   const result = await seriesChat(body, signal, value => ([
-    { role: 'system', content: buildSeriesInstructions('outline', { count, axes, hasLore: value.hasLore === true, loreTitles }) },
+    { role: 'system', content: buildSeriesInstructions('outline', { count, axes, hasLore: value.hasLore === true, loreTitles, sourceRefs }) },
     { role: 'user', content: String(value.input) }
   ]), { maxInput: 60000 });
   return { ...result, data: extractJsonObject(result.text) };
@@ -503,6 +522,7 @@ function createServer({ requestTimeoutMs = 300000 } = {}) {
         if (url.pathname === '/api/generate') return sendJson(res, 200, await generateImage(body, requestController.signal));
         if (url.pathname === '/api/optimize') return sendJson(res, 200, await optimizePrompt(body, requestController.signal));
         if (url.pathname === '/api/series/extract') return sendJson(res, 200, await seriesExtract(body, requestController.signal));
+        if (url.pathname === '/api/series/summarize') return sendJson(res, 200, await seriesSummarize(body, requestController.signal));
         if (url.pathname === '/api/series/reduce') return sendJson(res, 200, await seriesReduce(body, requestController.signal));
         if (url.pathname === '/api/series/describe') return sendJson(res, 200, await seriesDescribe(body, requestController.signal));
         if (url.pathname === '/api/series/outline') return sendJson(res, 200, await seriesOutline(body, requestController.signal));

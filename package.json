@@ -18,7 +18,9 @@
     "test:series-matrix": "python tests/series_matrix_smoke.py",
     "test:series-versions": "python tests/series_versions_smoke.py",
     "test:series-history": "python tests/series_history_smoke.py",
-    "test:series-batch": "python tests/series_batch_smoke.py"
+    "test:series-batch": "python tests/series_batch_smoke.py",
+    "test:phase-five": "node --test tests/phase-five.test.js",
+    "test:phase-five-browser": "python tests/phase_five_smoke.py"
   },
   "engines": {
     "node": ">=20"

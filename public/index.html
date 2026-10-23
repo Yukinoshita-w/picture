@@ -333,7 +333,7 @@
 
           <div class="series-view" id="seriesViewLore" data-series-view="lore" hidden>
             <div class="series-lore-toolbar">
-              <p class="series-hint">超长原文放在这里。只有被某一帧引用的条目才会进入该帧的提示词，原文永远完整保留。</p>
+              <p class="series-hint">原文完整保存在这里。拆帧时可选择章节或片段；生图只使用在帧详情中确认的相关摘录。</p>
               <div class="series-lore-actions">
                 <label class="template-search series-lore-search" for="seriesLoreSearch">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg>
@@ -417,7 +417,7 @@
       <div class="input-wrap"><input id="seriesLoreTitleInput" type="text" maxlength="60" placeholder="例如：铜制信匣的来历"></div>
       <label class="field-label" for="seriesLoreText">原文 <span class="required">*</span></label>
       <textarea id="seriesLoreText" class="series-theme-input" rows="8" placeholder="粘贴设定、小说片段或对白。只有被某一帧引用的条目才会进入该帧的提示词。" required></textarea>
-      <p class="field-hint">原文完整保存在本机浏览器，不会自动发送；只有在帧里引用它并生成时才会用到。</p>
+      <p class="field-hint">保存原文不会发送给模型。开始拆帧时发送所选片段；生成图片时只发送帧里确认的摘录。</p>
       <div class="settings-actions">
         <button class="button secondary" type="button" id="seriesLoreCancel">取消</button>
         <button class="button primary" type="submit">保存条目</button>
@@ -463,9 +463,16 @@
       </section>
 
       <p class="series-split-summary" id="seriesSplitSummary"></p>
+      <div class="series-split-progress" id="seriesSplitProgress" hidden aria-live="polite"></div>
+      <section class="series-split-draft" id="seriesSplitDraft" hidden>
+        <div class="series-split-section-head"><span class="field-label">拆帧草稿</span><span id="seriesSplitDraftMeta"></span></div>
+        <div id="seriesSplitDraftShots"></div>
+      </section>
     </div>
     <footer class="series-split-footer">
       <button class="button secondary" type="button" id="seriesSplitCancel">取消</button>
+      <button class="button secondary" type="button" id="seriesSplitRetry" hidden>重试未完成片段</button>
+      <button class="button primary" type="button" id="seriesSplitConfirm" hidden>确认并加入大纲</button>
       <button class="button primary" type="button" id="seriesSplitStart">开始拆分</button>
     </footer>
   </dialog>

@@ -973,6 +973,7 @@
       axisValues: {},
       references: inheritedReferences(series, assets),
       loreRefs: [],
+      loreSelections: [],
       status: 'draft',
       origin: 'manual',
       canonVersion: series.canon.version || 1,
@@ -989,7 +990,7 @@
       Object.assign(shot, saved[0]);
     } else {
       // Inspector edits must not overwrite a result/history committed concurrently.
-      const fields = ['title', 'beat', 'subject', 'action', 'scene', 'detail', 'overrides', 'negative', 'axisValues', 'references', 'loreRefs', 'updatedAt'];
+      const fields = ['title', 'beat', 'subject', 'action', 'scene', 'detail', 'overrides', 'negative', 'axisValues', 'references', 'loreRefs', 'loreSelections', 'updatedAt'];
       const patch = Object.fromEntries(fields.filter(key => Object.hasOwn(shot, key)).map(key => [key, structuredClone(shot[key])]));
       const saved = await store.updateShot(shot.id, shot.seriesId, current => ({ ...current, ...patch }));
       if (!saved) return;
@@ -1349,28 +1350,127 @@
     body.append(refBox);
 
     // Lore entries are opt-in per frame: only the ones ticked here enter this prompt.
-    if (state.lore.length) {
+    if (state.lore.length || shot.loreRefs?.length) {
       const loreBox = el('div', 'series-inspector-lore');
       loreBox.append(el('span', 'section-label', '引用设定 · 最多 3 条'));
+      for (const id of (shot.loreRefs || []).filter(id => !state.lore.some(item => item.id === id))) {
+        const missing = el('div', 'series-lore-reference');
+        missing.append(el('p', 'field-hint', '引用的档案条目已不存在，请清除此引用或重新添加原文。'), button('清除失效引用', 'text-action', async () => {
+          shot.loreRefs = (shot.loreRefs || []).filter(value => value !== id);
+          shot.loreSelections = (shot.loreSelections || []).filter(entry => entry.loreId !== id);
+          await persistShot(shot);
+          renderInspector();
+        }));
+        loreBox.append(missing);
+      }
       for (const item of state.lore) {
-        const choice = el('label', 'series-lore-choice');
+        const choice = el('div', 'series-lore-reference');
+        const label = el('label', 'series-lore-choice');
         const checkbox = el('input');
         checkbox.type = 'checkbox';
         checkbox.checked = (shot.loreRefs || []).includes(item.id);
         checkbox.disabled = !checkbox.checked && (shot.loreRefs || []).length >= 3;
         checkbox.addEventListener('change', async () => {
           const refs = new Set(shot.loreRefs || []);
+          const selections = (shot.loreSelections || []).filter(entry => entry.loreId !== item.id);
           if (checkbox.checked) {
             if (refs.size >= 3) { checkbox.checked = false; return; }
             refs.add(item.id);
+            selections.push({ loreId: item.id, pending: true });
           } else {
             refs.delete(item.id);
           }
           shot.loreRefs = [...refs];
+          shot.loreSelections = selections;
           await persistShot(shot);
-          updatePreview();
+          renderInspector();
         });
-        choice.append(checkbox, document.createTextNode(' ' + (item.title || '未命名条目')));
+        label.append(checkbox, document.createTextNode(' ' + (item.title || '未命名条目')));
+        choice.append(label);
+        if (checkbox.checked) {
+          const selection = (shot.loreSelections || []).find(entry => entry.loreId === item.id);
+          const sourceText = String(item.text || '');
+          const excerptParts = Llm.splitSourceFragments(sourceText, { target: 800, maxFragments: 500 });
+          const fragments = excerptParts.fragments;
+          const rangeSelect = el('select');
+          rangeSelect.setAttribute('aria-label', '选择「' + (item.title || '未命名条目') + '」的原文摘录');
+          rangeSelect.append(new Option('选择要发送的原文片段', ''));
+          const legacyFull = checkbox.checked && !selection;
+          let currentRange = legacyFull ? 'legacy-full' : '';
+          if (legacyFull) {
+            rangeSelect.append(new Option('确认引用完整条目 · ' + sourceText.length + ' 字符', 'legacy-full'));
+            currentRange = '';
+          }
+          if (selection && !selection.pending && Number.isInteger(Number(selection.start)) && Number.isInteger(Number(selection.end))) {
+            const key = 'range:' + selection.start + ':' + selection.end;
+            const existing = fragments.some(fragment => fragment.start === Number(selection.start) && fragment.end === Number(selection.end));
+            if (!existing) rangeSelect.append(new Option('当前引用 · 字符 ' + (Number(selection.start) + 1) + '–' + Number(selection.end), key));
+            currentRange = key;
+          }
+          fragments.forEach((fragment, index) => {
+            const heading = fragment.headingPath.join(' / ') || ('片段 ' + (index + 1));
+            const key = 'range:' + fragment.start + ':' + fragment.end;
+            rangeSelect.append(new Option(heading + ' · 字符 ' + (fragment.start + 1) + '–' + fragment.end, key));
+          });
+          rangeSelect.value = currentRange;
+          const excerptMeta = el('p', 'field-hint series-lore-excerpt-meta');
+          const excerpt = el('pre', 'series-lore-excerpt');
+          const showExcerpt = (start, end, value) => {
+            excerptMeta.textContent = '将发送字符 ' + (start + 1) + '–' + end + '，共 ' + value.length + ' / ' + sourceText.length + ' 字符。';
+            excerpt.textContent = value || '（空）';
+          };
+          if (selection && !selection.pending) showExcerpt(Number(selection.start), Number(selection.end), String(selection.text || ''));
+          else if (legacyFull) {
+            excerptMeta.textContent = '旧引用尚未确认：请选择相关片段，或明确确认引用完整条目。';
+            excerpt.textContent = '确认前不会发送原文。';
+          }
+          else {
+            excerptMeta.textContent = '选择一个章节或片段后，才会把原文加入提示词。';
+            excerpt.textContent = '尚未选择原文摘录。';
+          }
+          rangeSelect.addEventListener('change', async () => {
+            let next = null;
+            if (rangeSelect.value === 'legacy-full') {
+              next = { loreId: item.id, start: 0, end: sourceText.length, text: sourceText };
+            } else {
+              const match = rangeSelect.value.match(/^range:(\d+):(\d+)$/);
+              if (match) {
+                const start = Number(match[1]);
+                const end = Number(match[2]);
+                next = { loreId: item.id, start, end, text: sourceText.slice(start, end) };
+              }
+            }
+            shot.loreSelections = (shot.loreSelections || []).filter(entry => entry.loreId !== item.id);
+            shot.loreSelections.push(next || { loreId: item.id, pending: true });
+            await persistShot(shot);
+            if (next) showExcerpt(next.start, next.end, next.text);
+            else {
+              excerptMeta.textContent = '选择一个章节或片段后，才会把原文加入提示词。';
+              excerpt.textContent = '尚未选择原文摘录。';
+            }
+            updatePreview();
+          });
+          const rangeRow = el('label', 'series-lore-range');
+          rangeRow.append(el('span', '', '引用范围'), rangeSelect);
+          choice.append(rangeRow, excerptMeta, excerpt);
+          const sourceView = el('details', 'series-source-view');
+          const sourceBody = el('pre', 'series-lore-excerpt');
+          sourceView.append(el('summary', '', '回查完整原文（不会额外发送）'), sourceBody);
+          sourceView.addEventListener('toggle', () => {
+            if (!sourceView.open) return;
+            const active = (shot.loreSelections || []).find(entry => entry.loreId === item.id);
+            sourceBody.replaceChildren();
+            if (active && !active.pending && sourceText.slice(active.start, active.end) === active.text) {
+              const highlight = el('mark', '', active.text);
+              sourceBody.append(document.createTextNode(sourceText.slice(0, active.start)), highlight, document.createTextNode(sourceText.slice(active.end)));
+              sourceBody.scrollTop = highlight.offsetTop - sourceBody.offsetTop;
+            } else sourceBody.textContent = sourceText;
+          });
+          choice.append(sourceView);
+          if (excerptParts.truncated) {
+            choice.append(el('p', 'field-hint', '条目片段过多，列表仅显示前 500 段；可拆分档案条目后再选择后续内容。'));
+          }
+        }
         loreBox.append(choice);
       }
       body.append(loreBox);
@@ -1382,7 +1482,9 @@
     const promptBox = el('p', 'series-preview-text');
     const meta = el('p', 'series-preview-meta');
     const warnings = el('ul', 'series-preview-warnings');
-    preview.append(promptBox, meta, warnings);
+    const excerptPreview = el('div', 'series-preview-lore');
+    excerptPreview.append(el('span', 'section-label', '将发送的原文摘录'));
+    preview.append(promptBox, meta, excerptPreview, warnings);
     body.append(preview);
 
     function updatePreview() {
@@ -1390,6 +1492,12 @@
       promptBox.textContent = compiled.prompt || '（空）';
       meta.textContent = compiled.characters + ' / ' + Engine.PROMPT_LIMIT + ' 字符 · 参考图 ' + compiled.references.length + ' 张';
       meta.dataset.over = String(compiled.overLimit);
+      excerptPreview.hidden = !compiled.loreExcerpts.length;
+      excerptPreview.replaceChildren(el('span', 'section-label', '将发送的原文摘录'), ...compiled.loreExcerpts.map(entry => {
+        const block = el('div', 'series-preview-lore-item');
+        block.append(el('strong', '', entry.title + ' · 字符 ' + (entry.start + 1) + '–' + entry.end), el('pre', '', entry.text));
+        return block;
+      }));
       warnings.replaceChildren(...compiled.warnings.map(line => el('li', '', line)));
       warnings.hidden = compiled.warnings.length === 0;
       const problem = generationProblem(seriesParameters(), compiled.references.length);
@@ -1615,7 +1723,9 @@
     let problem = generationProblem(parameters, compiled.references.length);
     if (!problem && shot.pendingGeneration) problem = '图片待保存，请先重试保存或放弃待保存图片。';
     if (!problem && ![shot.subject, shot.action, shot.scene, shot.detail, shot.overrides?.note].some(value => String(value || '').trim())) problem = '帧描述为空，请填写主体、动作或场景。';
-    if (!problem && compiled.blocked) problem = '提示词存在变量冲突：' + compiled.conflicts.join(' ');
+    if (!problem && compiled.blocked) problem = compiled.conflicts.length
+      ? '提示词存在变量冲突：' + compiled.conflicts.join(' ')
+      : compiled.warnings.filter(warning => warning.includes('无法生成')).join(' ') || '请检查并确认原文引用。';
     if (!problem && compiled.overLimit) problem = '这一帧的提示词超过上限，请精简后再生成。';
     if (!problem && (shot.references || []).some(ref => !context.assets.some(asset => asset.id === ref.assetId && asset.data))) problem = '参考图资源缺失，请重新选择帧参考图。';
     if (!problem && (compiled.dropped?.length || references.length !== compiled.references.length)) problem = '参考图数量超过上限或资源缺失，请调整帧引用。';
@@ -2053,12 +2163,12 @@
 
   // ---------------------------------------------------------------- split frames
 
-  // The split dialog lets the user pick which lore entries to read and how many frames to
-  // cut them into. Only text is produced; nothing is sent to the image model.
-  // The remembered selection is scoped to one series: lore ids are unique per series, so a
-  // selection carried across a series switch would silently tick nothing.
-  let splitSelection = { seriesId: null, ids: new Set() };
+  // The split dialog keeps its fragment choices scoped to a series and shows the exact
+  // source ranges that will be summarized.
+  let splitSelection = { seriesId: null, fragments: new Set() };
   let splitContext = null;
+  let splitDraft = null;
+  let splitConfirming = false;
 
   function cancelSplitTask() {
     const task = state.splitTask;
@@ -2074,33 +2184,99 @@
     $('#seriesSplitDialog').close();
   }
 
+  function splitFragmentKey(loreId, fragmentId) { return loreId + ':' + fragmentId; }
+
+  function resetSplitDraft() {
+    splitDraft = null;
+    $('#seriesSplitProgress').hidden = true;
+    $('#seriesSplitProgress').replaceChildren();
+    $('#seriesSplitDraft').hidden = true;
+    $('#seriesSplitDraftShots').replaceChildren();
+    $('#seriesSplitRetry').hidden = true;
+    $('#seriesSplitRetry').textContent = '重试未完成片段';
+    $('#seriesSplitConfirm').hidden = true;
+    $('#seriesSplitStart').hidden = false;
+    $('#seriesSplitStart').textContent = '开始拆分';
+  }
+
+  function selectedSplitFragments() {
+    const selected = new Set([...document.querySelectorAll('#seriesSplitLore [data-fragment-key]:checked')].map(input => input.dataset.fragmentKey));
+    return (splitContext?.lore || []).flatMap(item => item.fragments
+      .filter(fragment => selected.has(splitFragmentKey(item.id, fragment.id)))
+      .map(fragment => ({ ...fragment, loreId: item.id, loreTitle: item.title || '未命名条目', sourceText: item.text })));
+  }
+
+  function setSplitControlsDisabled(disabled) {
+    document.querySelectorAll('#seriesSplitLore input, #seriesSplitSelectAll, #seriesSplitCount, [data-split-count]')
+      .forEach(input => { input.disabled = disabled; });
+  }
+
   function openSplitDialog() {
     if (!requireOptimizer()) return;
-    if (!state.series) return;
-    const lore = state.lore || [];
+    if (!state.series || state.splitTask || splitConfirming) return;
+    const lore = (state.lore || []).map(item => {
+      const prepared = Llm.splitSourceFragments(item.text || '', { target: 6000, maxFragments: 200 });
+      return { ...structuredClone(item), fragments: prepared.fragments, fragmentsTruncated: prepared.truncated };
+    });
     const container = $('#seriesSplitLore');
     const seriesId = state.series.id;
     splitContext = { series: structuredClone(state.series), lore: structuredClone(lore), assets: structuredClone(state.assets) };
-    if (splitSelection.seriesId !== seriesId) splitSelection = { seriesId, ids: new Set(lore.map(item => item.id)) };
-    const chosen = splitSelection.ids;
+    resetSplitDraft();
+    if (splitSelection.seriesId !== seriesId) {
+      splitSelection = { seriesId, fragments: new Set(lore.flatMap(item => item.fragments.map(fragment => splitFragmentKey(item.id, fragment.id)))) };
+    }
+    const chosen = splitSelection.fragments;
     container.replaceChildren(...lore.map((item, index) => {
-      const choice = el('label', 'series-split-choice');
+      const entry = el('section', 'series-split-entry');
+      const header = el('label', 'series-split-choice');
       const checkbox = el('input');
       checkbox.type = 'checkbox';
-      checkbox.checked = chosen.has(item.id);
-      checkbox.dataset.loreId = item.id;
+      checkbox.dataset.loreEntryId = item.id;
+      checkbox.checked = item.fragments.length > 0 && item.fragments.every(fragment => chosen.has(splitFragmentKey(item.id, fragment.id)));
+      const text = el('span', 'series-split-choice-body');
+      text.append(el('strong', '', item.title || '条目 ' + (index + 1)),
+        el('small', '', (item.text || '').length + ' 字符 · ' + item.fragments.length + ' 个片段' + (item.fragmentsTruncated ? ' · 超出预览上限' : '')));
+      header.append(checkbox, text);
+      entry.append(header);
       checkbox.addEventListener('change', () => {
-        if (checkbox.checked) chosen.add(item.id);
-        else chosen.delete(item.id);
+        for (const fragment of item.fragments) {
+          const key = splitFragmentKey(item.id, fragment.id);
+          if (checkbox.checked) chosen.add(key);
+          else chosen.delete(key);
+          const child = [...entry.querySelectorAll('[data-fragment-key]')].find(input => input.dataset.fragmentKey === key);
+          if (child) child.checked = checkbox.checked;
+        }
+        resetSplitDraft();
         updateSplitSummary();
       });
-      const text = el('span', 'series-split-choice-body');
-      text.append(
-        el('strong', '', item.title || '条目 ' + (index + 1)),
-        el('small', '', (item.text || '').length + ' 字符 · ' + String(item.text || '').slice(0, 46) + '…')
-      );
-      choice.append(checkbox, text);
-      return choice;
+      const fragmentList = el('div', 'series-split-fragments');
+      for (const fragment of item.fragments) {
+        const key = splitFragmentKey(item.id, fragment.id);
+        const row = el('div', 'series-split-fragment');
+        const fragmentLabel = el('label', 'series-split-fragment-choice');
+        const fragmentBox = el('input');
+        fragmentBox.type = 'checkbox';
+        fragmentBox.checked = chosen.has(key);
+        fragmentBox.dataset.fragmentKey = key;
+        const heading = fragment.headingPath.join(' / ') || ('片段 ' + (fragment.index + 1));
+        const labelText = el('span', 'series-split-choice-body');
+        labelText.append(el('strong', '', heading), el('small', '', '字符 ' + (fragment.start + 1) + '–' + fragment.end + ' / ' + String(item.text || '').length + ' · ' + fragment.chars + ' 字符'));
+        fragmentLabel.append(fragmentBox, labelText);
+        fragmentBox.addEventListener('change', () => {
+          if (fragmentBox.checked) chosen.add(key);
+          else chosen.delete(key);
+          checkbox.checked = item.fragments.length > 0 && item.fragments.every(part => chosen.has(splitFragmentKey(item.id, part.id)));
+          resetSplitDraft();
+          updateSplitSummary();
+        });
+        const inspect = el('details', 'series-split-fragment-preview');
+        inspect.append(el('summary', '', '查看实际读取原文'), el('pre', '', fragment.text));
+        row.append(fragmentLabel, inspect);
+        fragmentList.append(row);
+      }
+      entry.append(fragmentList);
+      if (item.fragmentsTruncated) entry.append(el('p', 'field-hint series-split-truncated', '该条目超过 200 个片段的单次预览上限。为避免遗漏，请拆成多个档案条目后再拆帧。'));
+      return entry;
     }));
     $('#seriesSplitEmpty').hidden = lore.length > 0;
     $('#seriesSplitCount').value = String(Math.max(1, Math.min(24, lore.length ? 6 : 1)));
@@ -2109,129 +2285,261 @@
     if (!dialog.open) dialog.showModal();
   }
 
-  function selectedLoreIds() {
-    return [...document.querySelectorAll('#seriesSplitLore input:checked')].map(input => input.dataset.loreId);
-  }
-
   function updateSplitSummary() {
-    const ids = selectedLoreIds();
-    const chars = (splitContext?.lore || []).filter(item => ids.includes(item.id)).reduce((sum, item) => sum + String(item.text || '').length, 0);
+    const fragments = selectedSplitFragments();
+    const ids = [...new Set(fragments.map(item => item.loreId))];
+    const chars = fragments.reduce((sum, fragment) => sum + fragment.chars, 0);
     // Plain text input: keep digits only and clamp to the supported range.
     const field = $('#seriesSplitCount');
     const digits = field.value.replace(/\D/g, '').slice(0, 2);
     if (digits !== field.value) field.value = digits;
     const count = Math.max(1, Math.min(24, Number(digits) || 1));
-    $('#seriesSplitSelectedCount').textContent = '已选 ' + ids.length + ' 条';
+    $('#seriesSplitSelectedCount').textContent = '已选 ' + ids.length + ' 条 · ' + fragments.length + ' 段';
     const summary = $('#seriesSplitSummary');
-    summary.textContent = ids.length
-      ? '将读取 ' + ids.length + ' 条档案（共 ' + chars + ' 字符），拆成 ' + count + ' 帧。'
-      : '至少要选一条档案，才能开始拆分。';
-    $('#seriesSplitStart').disabled = !ids.length || Boolean(state.splitTask);
+    const truncated = (splitContext?.lore || []).some(item => item.fragmentsTruncated && ids.includes(item.id));
+    summary.textContent = fragments.length
+      ? '将读取 ' + ids.length + ' 条档案中的 ' + fragments.length + ' 段，共 ' + chars + ' 字符；逐段摘要后按顺序拆成 ' + count + ' 帧，不会截掉所选原文。'
+      : '至少选择一个原文片段。';
+    if (!state.splitTask && !splitDraft && !$('#seriesSplitRetry').hidden) summary.textContent += ' 摘要失败片段可重试，已完成片段会从缓存复用。';
+    $('#seriesSplitStart').disabled = !fragments.length || truncated || Boolean(state.splitTask);
     // Highlight the preset that matches the current count, if any.
     document.querySelectorAll('[data-split-count]').forEach(preset => {
       preset.setAttribute('aria-pressed', String(Number(preset.dataset.splitCount) === count));
     });
   }
 
+  function renderSplitProgress(message, outcomes = []) {
+    const progress = $('#seriesSplitProgress');
+    progress.hidden = false;
+    const list = el('ul', 'series-split-progress-list');
+    for (const record of outcomes) {
+      const row = el('li', record.outcome?.ok ? 'is-done' : 'is-failed');
+      const location = record.chunk.headingPath.join(' / ') || record.chunk.loreTitle;
+      row.textContent = location + ' · 字符 ' + (record.chunk.start + 1) + '–' + record.chunk.end + ' · ' + (record.outcome?.ok ? (record.fromCache ? '已复用摘要缓存' : '摘要完成') : '失败：' + (record.outcome?.errors?.[0] || record.error?.message || '未知错误'));
+      if (record.outcome?.ok) {
+        const details = el('details', 'series-source-view');
+        details.append(el('summary', '', '查看章节摘要与事件顺序'), el('p', '', record.outcome.data.summary));
+        const events = el('ol');
+        for (const event of record.outcome.data.events) events.append(el('li', '', event.beat));
+        details.append(events);
+        row.append(details);
+      }
+      list.append(row);
+    }
+    progress.replaceChildren(el('p', '', message), ...(outcomes.length ? [list] : []));
+  }
+
+  function renderSplitDraft() {
+    const draft = splitDraft;
+    if (!draft) return;
+    $('#seriesSplitDraft').hidden = false;
+    $('#seriesSplitDraftMeta').textContent = draft.shots.length + ' 帧 · ' + draft.sourceRefs.length + ' 个事件来源';
+    const list = $('#seriesSplitDraftShots');
+    list.replaceChildren(...draft.shots.map((shot, index) => {
+      const source = draft.sources.get(shot.sourceRef);
+      const card = el('article', 'series-split-draft-shot');
+      card.append(el('strong', '', shot.code + ' · ' + (shot.title || shot.subject || '未命名帧')),
+        el('p', '', [shot.beat, shot.subject, shot.action, shot.scene, shot.detail].filter(Boolean).join(' · ')));
+      if (source) {
+        card.append(el('small', '', source.loreTitle + ' · ' + (source.chapterTitle || '原文片段') + ' · 字符 ' + (source.start + 1) + '–' + source.end));
+        card.append(el('pre', '', source.sourceQuote));
+      } else card.append(el('small', '', '缺少可回查来源'));
+      return card;
+    }));
+    $('#seriesSplitStart').hidden = true;
+    $('#seriesSplitRetry').hidden = true;
+    $('#seriesSplitConfirm').hidden = false;
+  }
+
   async function runSplit() {
     const context = splitContext;
     const series = context?.series;
     if (!series || state.splitTask) return;
-    const ids = selectedLoreIds();
-    if (!ids.length) return;
+    const selected = selectedSplitFragments();
+    if (!selected.length) return;
+    if (selected.length > 200) {
+      renderSplitProgress('当前所选片段超过 200 段，请减少选择后拆分。');
+      return;
+    }
+    if (selected.some(fragment => splitContext.lore.find(item => item.id === fragment.loreId)?.fragmentsTruncated)) {
+      renderSplitProgress('所选条目超过片段预览上限，请先拆成多个档案条目。');
+      return;
+    }
     const count = Math.max(1, Math.min(24, Number(String($('#seriesSplitCount').value).replace(/\D/g, '')) || 6));
-    const lore = context.lore.filter(item => ids.includes(item.id));
     const config = optimizerConfig();
-    const canonText = Engine.renderAnchor(series.canon);
     const task = beginModelTask('split', series.id);
     if (!task) return;
     state.splitTask = task;
     task.context = context;
-
-    // Only the selected entries are read, and each is tagged with how many frames it should
-    // contribute so a long entry does not get one frame while a short one gets five.
-    const totalChars = lore.reduce((sum, item) => sum + String(item.text || '').length, 0) || 1;
-    const block = lore.map((item, index) => {
-      const share = Math.max(1, Math.round((String(item.text || '').length / totalChars) * count));
-      return '【' + (item.title || '条目 ' + (index + 1)) + '｜建议 ' + share + ' 帧】\n' + String(item.text || '').slice(0, 4000);
-    }).join('\n\n');
-    const input = [
-      '系列标题：' + (series.title || '未命名'),
-      '风格圣经：' + (canonText || '未填写'),
-      '',
-      '请把下面的档案原文拆成 ' + count + ' 帧。',
-      block
-    ].join('\n');
-
+    const sourceChunks = selected.map((fragment, index) => ({
+      ...fragment,
+      id: 'F' + String(index + 1).padStart(3, '0'),
+      sourceStart: fragment.start,
+      sourceEnd: fragment.end,
+      index,
+      total: selected.length
+    }));
     $('#seriesSplitStart').disabled = true;
-    $('#seriesSplitSummary').textContent = '正在拆帧。关闭对话框会取消本次拆帧，未完成结果不会加入大纲。已发送的模型请求可能计费。';
+    $('#seriesSplitRetry').disabled = true;
+    setSplitControlsDisabled(true);
+    $('#seriesSplitSummary').textContent = '正在按原文顺序提炼章节摘要和事件。此阶段只生成文字草稿，不生成图片，也不会修改现有帧。';
     modelStatus(task, '正在把档案拆成 ' + count + ' 帧…');
     try {
-      const llm = Llm.createSeriesLlm({ request: post, concurrency: 1 });
+      const llm = Llm.createSeriesLlm({
+        request: post,
+        concurrency: 2,
+        store: {
+          getExtraction: key => store.getExtraction(series.id + ':' + key),
+          putExtraction: record => store.putExtraction({ ...record, id: series.id + ':' + record.id })
+        },
+        onProgress: event => {
+          if (task.cancelled || state.splitTask !== task) return;
+          if (event.phase === 'summarize') renderSplitProgress('已完成 ' + event.done + ' / ' + event.total + ' 段摘要' + (event.reused ? ' · ' + event.reused + ' 段复用缓存' : '') + '。');
+        }
+      });
       task.llm = llm;
+      const summarized = await llm.summarizeLore({
+        chunks: sourceChunks,
+        config,
+        seriesId: series.id,
+        promptVersion: String(Prompts?.SERIES_PROMPT_VERSION || 1) + ':story-summary-v1'
+      });
+      if (task.cancelled) return;
+      const failed = summarized.outcomes.filter(item => !item.outcome?.ok);
+      renderSplitProgress(failed.length
+        ? failed.length + ' 段摘要失败。重试时会复用已经成功的片段。'
+        : '章节摘要完成，正在按原文顺序分配 ' + count + ' 帧。', summarized.outcomes);
+      if (failed.length) {
+        $('#seriesSplitRetry').hidden = false;
+        $('#seriesSplitStart').hidden = true;
+        modelStatus(task, failed.length + ' 段摘要失败；可以重试未完成片段。', 'error');
+        return;
+      }
+      const sourceEvents = [];
+      for (const [index, record] of summarized.outcomes.entries()) {
+        const data = record.outcome.data;
+        const events = data.events;
+        for (const [eventIndex, event] of events.entries()) {
+          const quoteOffset = record.chunk.text.indexOf(event.sourceQuote);
+          if (quoteOffset < 0) throw new Error('片段「' + record.chunk.loreTitle + '」的原文引句无法回查，请重试该片段。');
+          sourceEvents.push({
+            id: record.chunk.id + 'E' + String(eventIndex + 1).padStart(2, '0'),
+            loreId: record.chunk.loreId,
+            loreTitle: record.chunk.loreTitle,
+            chapterTitle: data.chapterTitle || record.chunk.headingPath.join(' / ') || ('片段 ' + (index + 1)),
+            summary: data.summary,
+            beat: event.beat,
+            importance: event.importance,
+            sourceQuote: event.sourceQuote,
+            start: record.chunk.sourceStart + quoteOffset,
+            end: record.chunk.sourceStart + quoteOffset + event.sourceQuote.length,
+            fragmentStart: record.chunk.sourceStart,
+            fragmentEnd: record.chunk.sourceEnd
+          });
+        }
+      }
+      if (sourceEvents.length > 200) throw new Error('所选片段包含 ' + sourceEvents.length + ' 个事件，超过单次 200 个事件上限。请减少所选章节后分次拆帧；已有摘要缓存会保留');
+      const sourceRefs = sourceEvents.map(source => ({ id: source.id, loreTitle: source.loreTitle, chapterTitle: source.chapterTitle }));
+      const input = [
+        '系列标题：' + (series.title || '未命名'),
+        '风格设定：' + (Engine.renderAnchor(series.canon) || '未填写'),
+        '目标帧数：' + count,
+        '以下章节摘要和关键事件严格按所选原文顺序排列。先检查整体因果和节奏，再把帧数分配给事件；不要打乱先后，也不要引入摘要中没有的人物、地点或情节。每帧必须选择一个提供的事件 ID。',
+        ...sourceEvents.map(source => '【' + source.id + '】' + source.loreTitle + ' / ' + source.chapterTitle + '（原文字符 ' + (source.fragmentStart + 1) + '–' + source.fragmentEnd + '）\n章节摘要：' + source.summary + '\n事件（重要度 ' + source.importance + '）：' + source.beat + '\n可回查原句：' + source.sourceQuote)
+      ].join('\n\n');
+      if (input.length > 60000) throw new Error('章节摘要超过单次 60,000 字符的拆帧输入上限，请减少所选章节后分次拆帧；已有摘要缓存会保留');
       const result = await llm.outline({
         input,
         config,
         count,
         axes: series.axes || [],
         hasLore: true,
-        loreTitles: lore.map(item => item.title || '')
+        loreTitles: [...new Set(sourceEvents.map(source => source.loreTitle))],
+        sourceRefs
       });
       if (task.cancelled) return;
       if (!result.ok) throw new Error(result.errors[0] || '模型没有返回可用的帧清单');
-      const byTitle = new Map(lore.map(item => [String(item.title || '').trim(), item.id]).filter(([title]) => title));
-      const created = result.data.shots.map((item, index) => ({
-        ...newShot(index, series, context.assets),
-        code: item.code,
-        title: item.title,
-        beat: item.beat,
-        subject: item.subject,
-        action: item.action,
-        scene: item.scene,
-        detail: item.detail,
-        loreRefs: byTitle.has(String(item.loreTitle || '').trim()) ? [byTitle.get(String(item.loreTitle || '').trim())] : [],
-        axisValues: item.axisValues,
-        origin: 'split'
-      }));
-      const saved = await store.appendShots(series.id, created, result.data.axes || [], () => !task.cancelled);
-      if (!saved.length) {
-        task.saved = true;
-        if (state.splitTask === task && splitContext === context) $('#seriesSplitDialog').close();
-        modelStatus(task, '拆帧目标已删除或任务已取消，结果已忽略。');
-        return;
-      }
-      task.saved = true;
-      if (state.splitTask === task && splitContext === context) $('#seriesSplitDialog').close();
-      if (!isCurrentSeries(series.id)) return;
-      const fresh = await store.getSeries(series.id);
-      if (!isCurrentSeries(series.id) || !fresh) return;
-      if (!state.series.axes?.length && fresh.axes?.length) state.series.axes = fresh.axes;
-      for (const shot of saved) if (!state.shots.some(item => item.id === shot.id)) state.shots.push(shot);
-      state.shots.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-      if (!isVisibleSeries(series.id)) return;
-      renderShots();
-      setView('outline');
-      renderHeader();
-      const linked = created.filter(shot => shot.loreRefs.length).length;
-      status('已从 ' + lore.length + ' 条档案拆出 ' + created.length + ' 帧' + (linked ? '，其中 ' + linked + ' 帧已关联原文' : '') + '。', 'success');
-      // Splitting is usually followed by generating the whole batch, so offer it right away.
-      if (created.length) {
-        const proceed = await confirmAction({
-          title: '批量生成这些帧',
-          text: '刚拆出 ' + created.length + ' 帧。要现在按当前圣经与图库依次生成图片吗？每张都会实际计费。',
-          confirmLabel: '开始生成',
-          danger: false
-        });
-        if (proceed && isVisibleSeries(series.id)) await startBatch({ shots: saved, ask: false });
-      }
+      const sources = new Map(sourceEvents.map(source => [source.id, source]));
+      const shots = result.data.shots.map((item, index) => {
+        const source = sources.get(item.sourceRef);
+        if (!source) throw new Error('第 ' + (index + 1) + ' 帧没有匹配的原文来源。');
+        const selection = {
+          loreId: source.loreId,
+          start: source.start,
+          end: source.end,
+          text: source.sourceQuote,
+          sourceTitle: source.loreTitle,
+          headingPath: source.chapterTitle
+        };
+        return {
+          ...newShot(index, series, context.assets),
+          sourceRef: item.sourceRef,
+          code: item.code,
+          title: item.title,
+          beat: item.beat,
+          subject: item.subject,
+          action: item.action,
+          scene: item.scene,
+          detail: item.detail,
+          loreRefs: [source.loreId],
+          loreSelections: [selection],
+          loreSources: [{ sourceRef: source.id, start: source.start, end: source.end, fragmentStart: source.fragmentStart, fragmentEnd: source.fragmentEnd }],
+          axisValues: item.axisValues,
+          origin: 'split'
+        };
+      });
+      splitDraft = { seriesId: series.id, context, shots, axes: result.data.axes || [], sourceRefs, sources };
+      renderSplitDraft();
+      renderSplitProgress('草稿已生成。检查每帧描述、来源位置和将用于生图的原文引句，再确认加入大纲。', summarized.outcomes);
+      modelStatus(task, '拆帧草稿已生成，尚未写入大纲。');
     } catch (error) {
-      if (!task.cancelled) modelStatus(task, '拆分失败：' + describeError(error), 'error');
+      if (!task.cancelled) {
+        renderSplitProgress('拆帧失败：' + describeError(error) + '。重试会复用已完成的片段摘要。');
+        $('#seriesSplitStart').hidden = true;
+        $('#seriesSplitRetry').hidden = false;
+        $('#seriesSplitRetry').textContent = '重试拆帧';
+        modelStatus(task, '拆分失败：' + describeError(error), 'error');
+      }
     } finally {
       finishModelTask(task);
       if (state.splitTask === task) {
         state.splitTask = null;
-        updateSplitSummary();
+        setSplitControlsDisabled(false);
+        $('#seriesSplitRetry').disabled = false;
+        if (!splitDraft && $('#seriesSplitRetry').hidden) updateSplitSummary();
       }
+    }
+  }
+
+  async function confirmSplitDraft() {
+    const draft = splitDraft;
+    if (!draft || state.splitTask || splitConfirming || draft.context !== splitContext) return;
+    splitConfirming = true;
+    $('#seriesSplitConfirm').disabled = true;
+    try {
+      const loreIds = new Set(draft.shots.flatMap(shot => shot.loreRefs));
+      const sourceSnapshot = draft.context.lore.filter(item => loreIds.has(item.id)).map(item => ({ id: item.id, text: item.text }));
+      const saved = await store.appendShots(draft.seriesId, draft.shots, draft.axes,
+        () => splitDraft === draft && splitContext === draft.context && $('#seriesSplitDialog').open, { sourceSnapshot });
+      if (!saved.length) throw new Error('系列已删除或草稿已失效，未加入大纲。');
+      splitDraft = null;
+      $('#seriesSplitDialog').close();
+      if (!isCurrentSeries(draft.seriesId)) return;
+      const fresh = await store.getSeries(draft.seriesId);
+      if (!isCurrentSeries(draft.seriesId) || !fresh) return;
+      if (!state.series.axes?.length && fresh.axes?.length) state.series.axes = fresh.axes;
+      for (const shot of saved) if (!state.shots.some(item => item.id === shot.id)) state.shots.push(shot);
+      state.shots.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      if (!isVisibleSeries(draft.seriesId)) return;
+      renderShots();
+      setView('outline');
+      renderHeader();
+      status('已确认并加入 ' + saved.length + ' 帧。原文来源与引用摘录已关联；图片生成仍需单独启动。', 'success');
+    } catch (error) {
+      status('加入大纲失败：' + describeError(error), 'error');
+    } finally {
+      splitConfirming = false;
+      $('#seriesSplitConfirm').disabled = false;
     }
   }
 
@@ -3214,9 +3522,11 @@
     $('#seriesSplitClose').addEventListener('click', closeSplitDialog);
     $('#seriesSplitCancel').addEventListener('click', closeSplitDialog);
     $('#seriesSplitStart').addEventListener('click', runSplit);
-    $('#seriesSplitCount').addEventListener('input', updateSplitSummary);
+    $('#seriesSplitRetry').addEventListener('click', runSplit);
+    $('#seriesSplitConfirm').addEventListener('click', confirmSplitDraft);
+    $('#seriesSplitCount').addEventListener('input', () => { resetSplitDraft(); updateSplitSummary(); });
     $('#seriesSplitSelectAll').addEventListener('click', () => {
-      const boxes = [...document.querySelectorAll('#seriesSplitLore input')];
+      const boxes = [...document.querySelectorAll('#seriesSplitLore [data-fragment-key]')];
       const allOn = boxes.every(box => box.checked);
       for (const box of boxes) { box.checked = !allOn; box.dispatchEvent(new Event('change')); }
     });
@@ -3224,6 +3534,7 @@
     document.querySelectorAll('[data-split-count]').forEach(preset => {
       preset.addEventListener('click', () => {
         $('#seriesSplitCount').value = preset.dataset.splitCount;
+        resetSplitDraft();
         updateSplitSummary();
       });
     });
